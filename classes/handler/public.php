@@ -533,8 +533,12 @@ class Handler_Public extends Handler {
 						$_SESSION["profile"] = $profile;
 					}
 				}
+				if (array_key_exists("failed_login", $_SESSION)) {
+					$_SESSION["failed_login"] = null;
+				}
 			} else {
 				$_SESSION["login_error_msg"] = __("Incorrect username or password");
+				$_SESSION["failed_login"] = $login;
 				user_error("Failed login attempt for $login from {$_SERVER['REMOTE_ADDR']}", E_USER_WARNING);
 			}
 

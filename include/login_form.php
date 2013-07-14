@@ -129,7 +129,12 @@ function init() {
     		});
 		fetchProfiles();
 		dijit.byId("bw_limit").attr("checked", getCookie("ttrss_bwlimit") == 'true');
-		document.forms.loginForm.login.focus();
+		if (document.forms.loginForm.login.value.length == 0) {
+			document.forms.loginForm.login.focus();
+		}
+		else {
+			document.forms.loginForm.password.focus();
+		}
     	});
 
 }
@@ -199,7 +204,7 @@ function bwLimitChange(elem) {
 				onchange="fetchProfiles()" onfocus="fetchProfiles()" onblur="fetchProfiles()"
 				style="width : 220px"
 				required="1"
-				value="<?php echo $_SESSION["fake_login"] ?>" />
+				value="<?php echo isset($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : $_SESSION["fake_login"] ?>" />
 		</div>
 
 
