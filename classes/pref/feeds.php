@@ -71,7 +71,7 @@ class Pref_Feeds extends Handler_Protected {
 		$fsth = $this->pdo->prepare("SELECT id, title, last_error,
 			".SUBSTRING_FOR_DATE."(last_updated,1,19) AS last_updated, update_interval
 			FROM ttrss_feeds
-			WHERE cat_id = :cat AND 
+			WHERE cat_id = :cat AND
 			owner_uid = :uid AND
 			(:search = '' OR (LOWER(title) LIKE :search OR LOWER(feed_url) LIKE :search))
 			ORDER BY order_id, title");
@@ -238,9 +238,9 @@ class Pref_Feeds extends Handler_Protected {
 			$cat['child_unread'] = 0;
 
 			$fsth = $this->pdo->prepare("SELECT id, title,last_error,
-				".SUBSTRING_FOR_DATE."(last_updated,1,19) AS last_updated, update_interval				
+				".SUBSTRING_FOR_DATE."(last_updated,1,19) AS last_updated, update_interval
 				FROM ttrss_feeds
-				WHERE cat_id IS NULL AND 
+				WHERE cat_id IS NULL AND
 				owner_uid = :uid AND
 				(:search = '' OR (LOWER(title) LIKE :search OR LOWER(feed_url) LIKE :search))
 				ORDER BY order_id, title");
@@ -328,13 +328,12 @@ class Pref_Feeds extends Handler_Protected {
 	}
 
 	private function process_category_order(&$data_map, $item_id, $parent_id = false, $nest_level = 0) {
-		$debug = isset($_REQUEST["debug"]);
 
 		$prefix = "";
 		for ($i = 0; $i < $nest_level; $i++)
 			$prefix .= "   ";
 
-		if ($debug) _debug("$prefix C: $item_id P: $parent_id");
+		Debug::log("$prefix C: $item_id P: $parent_id");
 
 		$bare_item_id = substr($item_id, strpos($item_id, ':')+1);
 
@@ -361,7 +360,7 @@ class Pref_Feeds extends Handler_Protected {
 				$id = $item['_reference'];
 				$bare_id = substr($id, strpos($id, ':')+1);
 
-				if ($debug) _debug("$prefix [$order_id] $id/$bare_id");
+				Debug::log("$prefix [$order_id] $id/$bare_id");
 
 				if ($item['_reference']) {
 
@@ -641,7 +640,7 @@ class Pref_Feeds extends Handler_Protected {
 			$auth_checked = $auth_enabled ? 'checked' : '';
 			print "<div style=\"clear : both\">
 				<input type=\"checkbox\" $auth_checked name=\"need_auth\" dojoType=\"dijit.form.CheckBox\" id=\"feedEditDlg_loginCheck\"
-						onclick='checkboxToggleElement(this, \"feedEditDlg_loginContainer\")'>
+						onclick='displayIfChecked(this, \"feedEditDlg_loginContainer\")'>
 					<label for=\"feedEditDlg_loginCheck\">".
 				__('This feed requires authentication.')."</div>";
 
@@ -697,7 +696,7 @@ class Pref_Feeds extends Handler_Protected {
 			print "<hr/><input dojoType=\"dijit.form.CheckBox\" type=\"checkbox\" id=\"hide_images\"
 		name=\"hide_images\"
 			$checked>&nbsp;<label for=\"hide_images\">".
-				__('Do not embed images')."</label>";
+				__('Do not embed media')."</label>";
 
 			$cache_images = $row["cache_images"];
 
@@ -745,7 +744,7 @@ class Pref_Feeds extends Handler_Protected {
 			</label>
 			<input type=\"hidden\" name=\"op\" value=\"pref-feeds\">
 			<input type=\"hidden\" name=\"feed_id\" value=\"$feed_id\">
-			<input type=\"hidden\" name=\"method\" value=\"uploadicon\">			
+			<input type=\"hidden\" name=\"method\" value=\"uploadicon\">
 			<button class=\"\" dojoType=\"dijit.form.Button\" onclick=\"return uploadFeedIcon();\"
 				type=\"submit\">".__('Replace')."</button>
 			<button class=\"btn-danger\" dojoType=\"dijit.form.Button\" onclick=\"return removeFeedIcon($feed_id);\"
@@ -888,7 +887,7 @@ class Pref_Feeds extends Handler_Protected {
 			name=\"hide_images\"
 			dojoType=\"dijit.form.CheckBox\">&nbsp;<label class='insensitive' id=\"hide_images_l\"
 			for=\"hide_images\">".
-		__('Do not embed images')."</label>";
+		__('Do not embed media')."</label>";
 
 		print "&nbsp;"; $this->batch_edit_cbox("hide_images", "hide_images_l");
 
@@ -969,7 +968,7 @@ class Pref_Feeds extends Handler_Protected {
 
 			$sth = $this->pdo->prepare("UPDATE ttrss_feeds SET
 				cat_id = :cat_id,
-				title = :title, 
+				title = :title,
 				feed_url = :feed_url,
 				site_url = :site_url,
 				update_interval = :upd_intl,
@@ -1545,12 +1544,10 @@ class Pref_Feeds extends Handler_Protected {
 	}
 
 	static function remove_feed($id, $owner_uid) {
-		$debug = isset($_REQUEST["debug"]);
-
 		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_UNSUBSCRIBE_FEED) as $p) {
-			if( ! $p->hook_unsubscribe_feed($id, $owner_uid)){
-					if($debug) _debug("Feed not removed due to Error in Plugin. (HOOK_UNSUBSCRIBE_FEED)");
-					return;
+			if (! $p->hook_unsubscribe_feed($id, $owner_uid)) {
+                user_error("Feed $id (owner: $owner_uid) not removed due to plugin error (HOOK_UNSUBSCRIBE_FEED).", E_USER_WARNING);
+                return;
 			}
 		}
 
@@ -1659,7 +1656,7 @@ class Pref_Feeds extends Handler_Protected {
 
 		print "<div style=\"clear : both\">
 			<input type=\"checkbox\" name=\"need_auth\" dojoType=\"dijit.form.CheckBox\" id=\"feedDlg_loginCheck\"
-					onclick='checkboxToggleElement(this, \"feedDlg_loginContainer\")'>
+					onclick='displayIfChecked(this, \"feedDlg_loginContainer\")'>
 				<label for=\"feedDlg_loginCheck\">".
 				__('Feeds require authentication.')."</div>";
 
@@ -1714,11 +1711,11 @@ class Pref_Feeds extends Handler_Protected {
 
 	function regenFeedKey() {
 		$feed_id = clean($_REQUEST['id']);
-		$is_cat = clean($_REQUEST['is_cat']) == "true";
+		$is_cat = clean($_REQUEST['is_cat']);
 
 		$new_key = $this->update_feed_access_key($feed_id, $is_cat);
 
-		print json_encode(array("link" => $new_key));
+		print json_encode(["link" => $new_key]);
 	}
 
 
@@ -1728,7 +1725,7 @@ class Pref_Feeds extends Handler_Protected {
 		// clear old value and generate new one
 		$sth = $this->pdo->prepare("DELETE FROM ttrss_access_keys
 			WHERE feed_id = ? AND is_cat = ? AND owner_uid = ?");
-		$sth->execute([$feed_id, $is_cat, $owner_uid]);
+		$sth->execute([$feed_id, bool_to_sql_bool($is_cat), $owner_uid]);
 
 		return get_feed_access_key($feed_id, $is_cat, $owner_uid);
 	}

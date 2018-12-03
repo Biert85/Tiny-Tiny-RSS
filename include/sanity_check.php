@@ -47,7 +47,7 @@
 			}
 
 			if (version_compare(PHP_VERSION, '5.6.0', '<')) {
-				array_push($errors, "PHP version 5.6.0 or newer required.");
+				array_push($errors, "PHP version 5.6.0 or newer required. You're using " . PHP_VERSION . ".");
 			}
 
 			if (CONFIG_VERSION != EXPECTED_CONFIG_VERSION) {
@@ -75,7 +75,7 @@
 					"Configuration option checker sanity_config.php is outdated, please recreate it using ./utils/regen_config_checks.sh");
 			}
 
-			foreach ($requred_defines as $d) {
+			foreach ($required_defines as $d) {
 				if (!defined($d)) {
 					array_push($errors,
 						"Required configuration file parameter $d is not defined in config.php. You might need to copy it from config.php-dist.");
