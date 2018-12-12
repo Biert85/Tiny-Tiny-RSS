@@ -30,7 +30,11 @@ require(['dojo/parser', "dojo/ready", 'dijit/form/Button','dijit/form/CheckBox',
             parser.parse();
 
             dijit.byId("bw_limit").attr("checked", Cookie.get("ttrss_bwlimit") == 'true');
-            dijit.byId("login").focus();
+            if (dijit.byId("login").value) {
+                dijit.byId("password").focus();
+            } else {
+                dijit.byId("login").focus();
+            }
         });
 });
 
@@ -92,7 +96,7 @@ function bwLimitChange(elem) {
 
 		<div class="row">
 			<label><?php echo __("Password:") ?></label>
-			<input type="password" name="password" required="1"
+			<input type="password" id="password" name="password" required="1"
                     dojoType="dijit.form.TextBox"
 					style="width : 220px" class="input input-text"
 					value="<?php echo $_SESSION["fake_password"] ?>"/>
