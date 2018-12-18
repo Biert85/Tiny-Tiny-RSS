@@ -209,8 +209,7 @@ define(["dojo/_base/declare"], function (declare) {
 					const seq = reply['seq'];
 
 					if (seq && this.get_seq() != seq) {
-						console.log("[handleRpcJson] sequence mismatch: " + seq +
-							" (want: " + this.get_seq() + ")");
+						console.log("[handleRpcJson] sequence mismatch: ", seq, '!=', this.get_seq());
 						return true;
 					}
 
@@ -261,14 +260,6 @@ define(["dojo/_base/declare"], function (declare) {
 					if (k == "daemon_is_running" && v != 1) {
 						Notify.error("<span onclick=\"App.explainError(1)\">Update daemon is not running.</span>", true);
 						return;
-					}
-
-					if (k == "update_result") {
-						if (v) {
-							Element.show("updates-available");
-						} else {
-							Element.hide("updates-available");
-						}
 					}
 
 					if (k == "recent_log_events") {

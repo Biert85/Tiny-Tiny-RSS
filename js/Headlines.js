@@ -4,6 +4,7 @@ define(["dojo/_base/declare"], function (declare) {
 	Headlines = {
 		vgroup_last_feed: undefined,
 		_headlines_scroll_timeout: 0,
+		_observer_counters_timeout: 0,
 		headlines: [],
 		current_first_id: 0,
 		row_observer: new MutationObserver((mutations) => {
@@ -141,7 +142,11 @@ define(["dojo/_base/declare"], function (declare) {
 
 			if (promises.length > 0)
 				Promise.all([promises]).then(() => {
-					Feeds.requestCounters(true);
+					window.clearTimeout(this._observer_counters_timeout);
+
+					this._observer_counters_timeout = setTimeout(() => {
+						Feeds.requestCounters(true);
+					}, 1000);
 				});
 
 		},
@@ -213,7 +218,7 @@ define(["dojo/_base/declare"], function (declare) {
 
 			console.log("loadMore, offset=", offset);
 
-			Feeds.open({feed: Feeds.getActive(), is_cat: Feeds.activeIsCat(), offset: offset});
+			Feeds.open({feed: Feeds.getActive(), is_cat: Feeds.activeIsCat(), offset: offset, append: true});
 		},
 		scrollHandler: function () {
 			try {
@@ -524,18 +529,15 @@ define(["dojo/_base/declare"], function (declare) {
 
 			return tmp.firstChild;
 		},
-		onLoaded: function (transport, offset) {
+		onLoaded: function (transport, offset, append) {
 			const reply = App.handleRpcJson(transport);
 
-			console.log("Headlines.onLoaded: offset=", offset);
+			console.log("Headlines.onLoaded: offset=", offset, "append=", append);
 
 			let is_cat = false;
 			let feed_id = false;
 
 			if (reply) {
-
-				if (offset == 0)
-					Article.setActive(0);
 
 				is_cat = reply['headlines']['is_cat'];
 				feed_id = reply['headlines']['id'];
@@ -543,22 +545,6 @@ define(["dojo/_base/declare"], function (declare) {
 
 				if (feed_id != -7 && (feed_id != Feeds.getActive() || is_cat != Feeds.activeIsCat()))
 					return;
-
-				try {
-					if (offset == 0) {
-						$("headlines-frame").scrollTop = 0;
-
-						Element.hide("floatingTitle");
-						$("floatingTitle").setAttribute("data-article-id", 0);
-						$("floatingTitle").innerHTML = "";
-					}
-				} catch (e) {
-				}
-
-				$("headlines-frame").removeClassName("cdm");
-				$("headlines-frame").removeClassName("normal");
-
-				$("headlines-frame").addClassName(App.isCombinedMode() ? "cdm" : "normal");
 
 				const headlines_count = reply['headlines-info']['count'];
 				Feeds.infscroll_disabled = parseInt(headlines_count) != 30;
@@ -568,7 +554,25 @@ define(["dojo/_base/declare"], function (declare) {
 				//this.vgroup_last_feed = reply['headlines-info']['vgroup_last_feed'];
 				this.current_first_id = reply['headlines']['first_id'];
 
-				if (offset == 0) {
+				if (!append) {
+
+					$("headlines-frame").removeClassName("cdm");
+					$("headlines-frame").removeClassName("normal");
+
+					$("headlines-frame").addClassName(App.isCombinedMode() ? "cdm" : "normal");
+
+					Article.setActive(0);
+
+					try {
+						$("headlines-frame").scrollTop = 0;
+
+						Element.hide("floatingTitle");
+						$("floatingTitle").setAttribute("data-article-id", 0);
+						$("floatingTitle").innerHTML = "";
+					} catch (e) {
+						console.warn(e);
+					}
+
 					//this.headlines = [];
 					this.vgroup_last_feed = undefined;
 
@@ -746,7 +750,7 @@ define(["dojo/_base/declare"], function (declare) {
 			}
 
 			ids.each((id) => {
-				this.toggleMark(id);
+				this.togglePub(id);
 			});
 		},
 		toggleMark: function (id) {
