@@ -256,18 +256,6 @@ class RSSUtils {
 					FEED_FETCH_TIMEOUT,
 					0);
 
-				global $fetch_curl_used;
-
-				if (!$fetch_curl_used) {
-					$is_gzipped = RSSUtils::is_gzipped($feed_data);
-
-					if ($is_gzipped) {
-						$tmp = @gzdecode($feed_data);
-
-						if ($tmp) $feed_data = $tmp;
-					}
-				}
-
 				$feed_data = trim($feed_data);
 
 				$rss = new FeedParser($feed_data);
@@ -275,8 +263,8 @@ class RSSUtils {
 
 				if (!$rss->error()) {
 					$basic_info = array(
-						'title' => mb_substr($rss->get_title(), 0, 199),
-						'site_url' => mb_substr(rewrite_relative_url($fetch_url, $rss->get_link()), 0, 245)
+						'title' => mb_substr(clean($rss->get_title()), 0, 199),
+						'site_url' => mb_substr(rewrite_relative_url($fetch_url, clean($rss->get_link())), 0, 245)
 					);
 				}
 			}
@@ -434,20 +422,6 @@ class RSSUtils {
 				"last_modified" => $force_refetch ? "" : $stored_last_modified
 			]);
 
-			global $fetch_curl_used;
-
-			if (!$fetch_curl_used) {
-				$is_gzipped = RSSUtils::is_gzipped($feed_data);
-
-				Debug::log("is_gzipped: $is_gzipped", Debug::$LOG_VERBOSE);
-
-				if ($is_gzipped) {
-					$tmp = @gzdecode($feed_data);
-
-					if ($tmp) $feed_data = $tmp;
-				}
-			}
-
 			$feed_data = trim($feed_data);
 
 			Debug::log("fetch done.", Debug::$LOG_VERBOSE);
@@ -525,10 +499,10 @@ class RSSUtils {
 				return false;
 			}
 
-			$site_url = mb_substr(rewrite_relative_url($fetch_url, $rss->get_link()), 0, 245);
+			$site_url = mb_substr(rewrite_relative_url($fetch_url, clean($rss->get_link())), 0, 245);
 
 			Debug::log("site_url: $site_url", Debug::$LOG_VERBOSE);
-			Debug::log("feed_title: " . $rss->get_title(), Debug::$LOG_VERBOSE);
+			Debug::log("feed_title: " . clean($rss->get_title()), Debug::$LOG_VERBOSE);
 
 			if ($favicon_needs_check || $force_refetch) {
 
@@ -635,7 +609,7 @@ class RSSUtils {
 
 				$entry_title = strip_tags($item->get_title());
 
-				$entry_link = rewrite_relative_url($site_url, $item->get_link());
+				$entry_link = rewrite_relative_url($site_url, clean($item->get_link()));
 
 				$entry_language = mb_substr(trim($item->get_language()), 0, 2);
 
@@ -1612,7 +1586,7 @@ class RSSUtils {
 		}
 	}
 
-	private static function is_gzipped($feed_data) {
+	static function is_gzipped($feed_data) {
 		return mb_strpos($feed_data, "\x1f" . "\x8b" . "\x08", 0, "US-ASCII") === 0;
 	}
 
