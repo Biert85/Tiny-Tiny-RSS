@@ -71,6 +71,9 @@
 					"Configuration option checker sanity_config.php is outdated, please recreate it using ./utils/regen_config_checks.sh");
 			}
 
+			if (!isset($required_defines)) {
+				$required_defines = [];
+			}
 			foreach ($required_defines as $d) {
 				if (!defined($d)) {
 					array_push($errors,
