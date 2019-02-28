@@ -61,6 +61,8 @@ class Pref_Users extends Handler_Protected {
 				print "<div class=\"dlgSec\">".__("Authentication")."</div>";
 				print "<div class=\"dlgSecCont\">";
 
+				print "<fieldset>";
+
 				print __('Access level: ') . " ";
 
 				if (!$sel_disabled) {
@@ -72,10 +74,13 @@ class Pref_Users extends Handler_Protected {
 					print_hidden("access_level", "$access_level");
 				}
 
-				print "<hr/>";
+				print "</fieldset>";
+				print "<fieldset>";
 
 				print "<input dojoType=\"dijit.form.TextBox\" type=\"password\" size=\"20\" placeholder=\"Change password\"
-				name=\"password\">";
+					name=\"password\">";
+
+				print "</fieldset>";
 
 				print "</div>";
 
@@ -283,35 +288,35 @@ class Pref_Users extends Handler_Protected {
 				$sth->execute([$pwd_hash, $new_salt, $uid]);
 
 				if ($show_password) {
-					print T_sprintf("Changed password of user %s to %s", $login, $tmp_user_pwd);
+					print_notice(T_sprintf("Changed password of user %s to %s", $login, $tmp_user_pwd));
 				} else {
 					print_notice(T_sprintf("Sending new password of user %s to %s", $login, $email));
-				}
 
-				if ($email) {
-					require_once "lib/MiniTemplator.class.php";
+					if ($email) {
+						require_once "lib/MiniTemplator.class.php";
 
-					$tpl = new MiniTemplator;
+						$tpl = new MiniTemplator;
 
-					$tpl->readTemplateFromFile("templates/resetpass_template.txt");
+						$tpl->readTemplateFromFile("templates/resetpass_template.txt");
 
-					$tpl->setVariable('LOGIN', $login);
-					$tpl->setVariable('NEWPASS', $tmp_user_pwd);
+						$tpl->setVariable('LOGIN', $login);
+						$tpl->setVariable('NEWPASS', $tmp_user_pwd);
 
-					$tpl->addBlock('message');
+						$tpl->addBlock('message');
 
-					$message = "";
+						$message = "";
 
-					$tpl->generateOutputToString($message);
+						$tpl->generateOutputToString($message);
 
-					$mailer = new Mailer();
+						$mailer = new Mailer();
 
-					$rc = $mailer->mail(["to_name" => $login,
-						"to_address" => $email,
-						"subject" => __("[tt-rss] Password change notification"),
-						"message" => $message]);
+						$rc = $mailer->mail(["to_name" => $login,
+							"to_address" => $email,
+							"subject" => __("[tt-rss] Password change notification"),
+							"message" => $message]);
 
-					if (!$rc) print_error($mailer->error());
+						if (!$rc) print_error($mailer->error());
+					}
 				}
 
 			}
