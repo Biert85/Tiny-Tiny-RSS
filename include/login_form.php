@@ -84,7 +84,7 @@ function bwLimitChange(elem) {
 				<label><?php echo __("Login:") ?></label>
 				<input name="login" id="login" dojoType="dijit.form.TextBox" type="text"
 					   onchange="fetchProfiles()" onfocus="fetchProfiles()" onblur="fetchProfiles()"
-					   required="1" value="<?php echo issett($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : $_SESSION["fake_login"] ?>" />
+					   required="1" value="<?php echo isset($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : $_SESSION["fake_login"] ?>" />
 			</fieldset>
 
 			<fieldset>
