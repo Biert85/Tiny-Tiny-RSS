@@ -90,7 +90,7 @@ function bwLimitChange(elem) {
 			<fieldset>
 				<label><?php echo __("Password:") ?></label>
 
-				<input type="password" name="password" required="1"
+				<input type="password" name="password" id="password" required="1"
 					   dojoType="dijit.form.TextBox"
 					   class="input input-text"
 					   value="<?php echo $_SESSION["fake_password"] ?>"/>
