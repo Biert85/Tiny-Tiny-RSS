@@ -1,6 +1,6 @@
 <?php
 	define('EXPECTED_CONFIG_VERSION', 26);
-	define('SCHEMA_VERSION', 135);
+	define('SCHEMA_VERSION', 139);
 
 	define('LABEL_BASE_INDEX', -1024);
 	define('PLUGIN_FEED_BASE_INDEX', -128);
@@ -15,6 +15,7 @@
 	$fetch_curl_used = false;
 
 	libxml_disable_entity_loader(true);
+	libxml_use_internal_errors(true);
 
 	// separate test because this is included before sanity checks
 	if (function_exists("mb_internal_encoding")) mb_internal_encoding("UTF-8");
@@ -25,6 +26,9 @@
 	} else {
 		error_reporting(E_ALL & ~E_NOTICE);
 	}
+
+	ini_set('display_errors', 0);
+	ini_set('display_startup_errors', 0);
 
 	require_once 'config.php';
 
@@ -53,8 +57,6 @@
 	// feed limit for one update batch
 	define_default('DAEMON_SLEEP_INTERVAL', 120);
 	// default sleep interval between feed updates (sec)
-	define_default('MIN_CACHE_FILE_SIZE', 1024);
-	// do not cache files smaller than that (bytes)
 	define_default('MAX_CACHE_FILE_SIZE', 64*1024*1024);
 	// do not cache files larger than that (bytes)
 	define_default('MAX_DOWNLOAD_FILE_SIZE', 16*1024*1024);
@@ -64,6 +66,11 @@
 	define_default('MAX_CONDITIONAL_INTERVAL', 3600*12);
 	// max interval between forced unconditional updates for servers
 	// not complying with http if-modified-since (seconds)
+	define_default('MAX_FETCH_REQUESTS_PER_HOST', 25);
+	// a maximum amount of allowed HTTP requests per destination host
+	// during a single update (i.e. within PHP process lifetime)
+	// this is used to not cause excessive load on the origin server on
+	// e.g. feed subscription when all articles are being processes
 
 	/* tunables end here */
 
@@ -141,17 +148,15 @@
 			}
 
 			_bindtextdomain("messages", "locale");
-
 			_textdomain("messages");
 			_bind_textdomain_codeset("messages", "UTF-8");
 		}
 	}
 
 	require_once 'db-prefs.php';
-	require_once 'version.php';
 	require_once 'controls.php';
 
-	define('SELF_USER_AGENT', 'Tiny Tiny RSS/' . VERSION . ' (http://tt-rss.org/)');
+	define('SELF_USER_AGENT', 'Tiny Tiny RSS/' . get_version() . ' (http://tt-rss.org/)');
 	ini_set('user_agent', SELF_USER_AGENT);
 
 	$schema_version = false;
@@ -161,106 +166,10 @@
 	    Debug::log($msg);
 	}
 
-	/**
-	 * Purge a feed old posts.
-	 *
-	 * @param mixed $link A database connection.
-	 * @param mixed $feed_id The id of the purged feed.
-	 * @param mixed $purge_interval Olderness of purged posts.
-	 * @param boolean $debug Set to True to enable the debug. False by default.
-	 * @access public
-	 * @return void
-	 */
-	function purge_feed($feed_id, $purge_interval) {
+	function reset_fetch_domain_quota() {
+		global $fetch_domain_hits;
 
-		if (!$purge_interval) $purge_interval = feed_purge_interval($feed_id);
-
-		$pdo = Db::pdo();
-
-		$sth = $pdo->prepare("SELECT owner_uid FROM ttrss_feeds WHERE id = ?");
-		$sth->execute([$feed_id]);
-
-		$owner_uid = false;
-
-		if ($row = $sth->fetch()) {
-			$owner_uid = $row["owner_uid"];
-		}
-
-		if ($purge_interval == -1 || !$purge_interval) {
-			if ($owner_uid) {
-				CCache::update($feed_id, $owner_uid);
-			}
-			return;
-		}
-
-		if (!$owner_uid) return;
-
-		if (FORCE_ARTICLE_PURGE == 0) {
-			$purge_unread = get_pref("PURGE_UNREAD_ARTICLES",
-				$owner_uid, false);
-		} else {
-			$purge_unread = true;
-			$purge_interval = FORCE_ARTICLE_PURGE;
-		}
-
-		if (!$purge_unread)
-			$query_limit = " unread = false AND ";
-		else
-			$query_limit = "";
-
-		$purge_interval = (int) $purge_interval;
-
-		if (DB_TYPE == "pgsql") {
-			$sth = $pdo->prepare("DELETE FROM ttrss_user_entries
-				USING ttrss_entries
-				WHERE ttrss_entries.id = ref_id AND
-				marked = false AND
-				feed_id = ? AND
-				$query_limit
-				ttrss_entries.date_updated < NOW() - INTERVAL '$purge_interval days'");
-			$sth->execute([$feed_id]);
-
-		} else {
-			$sth  = $pdo->prepare("DELETE FROM ttrss_user_entries
-				USING ttrss_user_entries, ttrss_entries
-				WHERE ttrss_entries.id = ref_id AND
-				marked = false AND
-				feed_id = ? AND
-				$query_limit
-				ttrss_entries.date_updated < DATE_SUB(NOW(), INTERVAL $purge_interval DAY)");
-			$sth->execute([$feed_id]);
-
-		}
-
-		$rows = $sth->rowCount();
-
-		CCache::update($feed_id, $owner_uid);
-
-        Debug::log("Purged feed $feed_id ($purge_interval): deleted $rows articles");
-
-		return $rows;
-	} // function purge_feed
-
-	function feed_purge_interval($feed_id) {
-
-		$pdo = DB::pdo();
-
-		$sth = $pdo->prepare("SELECT purge_interval, owner_uid FROM ttrss_feeds
-			WHERE id = ?");
-		$sth->execute([$feed_id]);
-
-		if ($row = $sth->fetch()) {
-			$purge_interval = $row["purge_interval"];
-			$owner_uid = $row["owner_uid"];
-
-			if ($purge_interval == 0) $purge_interval = get_pref(
-				'PURGE_OLD_DAYS', $owner_uid);
-
-			return $purge_interval;
-
-		} else {
-			return -1;
-		}
+		$fetch_domain_hits = [];
 	}
 
 	// TODO: max_size currently only works for CURL transfers
@@ -275,6 +184,7 @@
 		global $fetch_last_modified;
 		global $fetch_effective_url;
 		global $fetch_curl_used;
+		global $fetch_domain_hits;
 
 		$fetch_last_error = false;
 		$fetch_last_error_code = -1;
@@ -283,6 +193,9 @@
 		$fetch_curl_used = false;
 		$fetch_last_modified = "";
 		$fetch_effective_url = "";
+
+		if (!is_array($fetch_domain_hits))
+			$fetch_domain_hits = [];
 
 		if (!is_array($options)) {
 
@@ -319,12 +232,21 @@
 		$followlocation = isset($options["followlocation"]) ? $options["followlocation"] : true;
 		$max_size = isset($options["max_size"]) ? $options["max_size"] : MAX_DOWNLOAD_FILE_SIZE; // in bytes
 		$http_accept = isset($options["http_accept"]) ? $options["http_accept"] : false;
+		$http_referrer = isset($options["http_referrer"]) ? $options["http_referrer"] : false;
 
 		$url = ltrim($url, ' ');
 		$url = str_replace(' ', '%20', $url);
 
 		if (strpos($url, "//") === 0)
 			$url = 'http:' . $url;
+
+		$url_host = parse_url($url, PHP_URL_HOST);
+		$fetch_domain_hits[$url_host] += 1;
+
+		if ($fetch_domain_hits[$url_host] > MAX_FETCH_REQUESTS_PER_HOST) {
+			user_error("Exceeded fetch request quota for $url_host: " . $fetch_domain_hits[$url_host], E_USER_WARNING);
+			#return false;
+		}
 
 		if (!defined('NO_CURL') && function_exists('curl_init') && !ini_get("open_basedir")) {
 
@@ -354,7 +276,9 @@
 			curl_setopt($ch, CURLOPT_USERAGENT, $useragent ? $useragent :
 				SELF_USER_AGENT);
 			curl_setopt($ch, CURLOPT_ENCODING, "");
-			//curl_setopt($ch, CURLOPT_REFERER, $url);
+
+			if  ($http_referrer)
+				curl_setopt($ch, CURLOPT_REFERER, $http_referrer);
 
 			if ($max_size) {
 				curl_setopt($ch, CURLOPT_NOPROGRESS, false);
@@ -482,6 +406,9 @@
 			if ($http_accept)
 				array_push($context_options['http']['header'], "Accept: $http_accept");
 
+			if ($http_referrer)
+				array_push($context_options['http']['header'], "Referer: $http_referrer");
+
 			if (defined('_HTTP_PROXY')) {
 				$context_options['http']['request_fulluri'] = true;
 				$context_options['http']['proxy'] = _HTTP_PROXY;
@@ -544,48 +471,6 @@
 		}
 
 	}
-
-	/**
-	 * Try to determine the favicon URL for a feed.
-	 * adapted from wordpress favicon plugin by Jeff Minard (http://thecodepro.com/)
-	 * http://dev.wp-plugins.org/file/favatars/trunk/favatars.php
-	 *
-	 * @param string $url A feed or page URL
-	 * @access public
-	 * @return mixed The favicon URL, or false if none was found.
-	 */
-	function get_favicon_url($url) {
-
-		$favicon_url = false;
-
-		if ($html = @fetch_file_contents($url)) {
-
-			libxml_use_internal_errors(true);
-
-			$doc = new DOMDocument();
-			$doc->loadHTML($html);
-			$xpath = new DOMXPath($doc);
-
-			$base = $xpath->query('/html/head/base[@href]');
-			foreach ($base as $b) {
-				$url = rewrite_relative_url($url, $b->getAttribute("href"));
-				break;
-			}
-
-			$entries = $xpath->query('/html/head/link[@rel="shortcut icon" or @rel="icon"]');
-			if (count($entries) > 0) {
-				foreach ($entries as $entry) {
-					$favicon_url = rewrite_relative_url($url, $entry->getAttribute("href"));
-					break;
-				}
-			}
-		}
-
-		if (!$favicon_url)
-			$favicon_url = rewrite_relative_url($url, "/favicon.ico");
-
-		return $favicon_url;
-	} // function get_favicon_url
 
 	function initialize_user_prefs($uid, $profile = false) {
 
@@ -655,7 +540,7 @@
 		return "";
 	}
 
-	function authenticate_user($login, $password, $check_only = false) {
+	function authenticate_user($login, $password, $check_only = false, $service = false) {
 
 		if (!SINGLE_USER_MODE) {
 			$user_id = false;
@@ -663,7 +548,7 @@
 
 			foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_AUTH_USER) as $plugin) {
 
-				$user_id = (int) $plugin->authenticate($login, $password);
+				$user_id = (int) $plugin->authenticate($login, $password, $service);
 
 				if ($user_id) {
 					$auth_module = strtolower(get_class($plugin));
@@ -677,7 +562,6 @@
 				session_regenerate_id(true);
 
 				$_SESSION["uid"] = $user_id;
-				$_SESSION["version"] = VERSION_STATIC;
 				$_SESSION["auth_module"] = $auth_module;
 
 				$pdo = DB::pdo();
@@ -738,21 +622,32 @@
 		}
 	}
 
-	function make_password($length = 8) {
+	function clean_filename($filename) {
+		return basename(preg_replace("/\.\.|[\/\\\]/", "", clean($filename)));
+	}
 
+	function make_password($length = 12) {
 		$password = "";
-		$possible = "0123456789abcdfghjkmnpqrstvwxyzABCDFGHJKMNPQRSTVWXYZ";
+		$possible = "0123456789abcdfghjkmnpqrstvwxyzABCDFGHJKMNPQRSTVWXYZ*%+^";
 
-	$i = 0;
+		$i = 0;
 
 		while ($i < $length) {
-			$char = substr($possible, mt_rand(0, strlen($possible)-1), 1);
+
+			try {
+				$idx = function_exists("random_int") ? random_int(0, strlen($possible) - 1) : mt_rand(0, strlen($possible) - 1);
+			} catch (Exception $e) {
+				$idx = mt_rand(0, strlen($possible) - 1);
+			}
+
+			$char = substr($possible, $idx, 1);
 
 			if (!strstr($password, $char)) {
 				$password .= $char;
 				$i++;
 			}
 		}
+
 		return $password;
 	}
 
@@ -1148,10 +1043,12 @@
 			__("Navigation") => array(
 				"next_feed" => __("Open next feed"),
 				"prev_feed" => __("Open previous feed"),
-				"next_article" => __("Open next article"),
-				"prev_article" => __("Open previous article"),
-				"next_article_noscroll" => __("Open next article (don't scroll long articles)"),
-				"prev_article_noscroll" => __("Open previous article (don't scroll long articles)"),
+				"next_article_or_scroll" => __("Open next article (in combined mode, scroll down)"),
+				"prev_article_or_scroll" => __("Open previous article (in combined mode, scroll up)"),
+				"next_article_page" => __("Scroll article by one page down"),
+				"prev_article_page" => __("Scroll article by one page up"),
+				"next_article_noscroll" => __("Open next article"),
+				"prev_article_noscroll" => __("Open previous article"),
 				"next_article_noexpand" => __("Move to next article (don't expand or mark read)"),
 				"prev_article_noexpand" => __("Move to previous article (don't expand or mark read)"),
 				"search_dialog" => __("Show search dialog")),
@@ -1165,6 +1062,8 @@
 				"catchup_above" => __("Mark above as read"),
 				"article_scroll_down" => __("Scroll down"),
 				"article_scroll_up" => __("Scroll up"),
+				"article_page_down" => __("Scroll down page"),
+				"article_page_up" => __("Scroll up page"),
 				"select_article_cursor" => __("Select article under cursor"),
 				"email_article" => __("Email article"),
 				"close_article" => __("Close/collapse article"),
@@ -1197,13 +1096,13 @@
 				"goto_fresh" => __("Fresh"),
 				"goto_marked" => __("Starred"),
 				"goto_published" => __("Published"),
+				"goto_read" => __("Recently read"),
 				"goto_tagcloud" => __("Tag cloud"),
 				"goto_prefs" => __("Preferences")),
 			__("Other") => array(
 				"create_label" => __("Create label"),
 				"create_filter" => __("Create filter"),
 				"collapse_sidebar" => __("Un/collapse sidebar"),
-				"toggle_night_mode" => __("Toggle night mode"),
 				"help_dialog" => __("Show help dialog"))
 		);
 
@@ -1216,40 +1115,40 @@
 
 	function get_hotkeys_map() {
 		$hotkeys = array(
-	//			"navigation" => array(
 			"k" => "next_feed",
 			"j" => "prev_feed",
-			"n" => "next_article",
-			"p" => "prev_article",
-			"(38)|up" => "prev_article",
-			"(40)|down" => "next_article",
-	//				"^(38)|Ctrl-up" => "prev_article_noscroll",
-	//				"^(40)|Ctrl-down" => "next_article_noscroll",
-			"(191)|/" => "search_dialog",
-	//			"article" => array(
+			"n" => "next_article_noscroll",
+			"p" => "prev_article_noscroll",
+			//"(33)|PageUp" => "prev_article_page",
+			//"(34)|PageDown" => "next_article_page",
+			"*(33)|Shift+PgUp" => "article_page_up",
+			"*(34)|Shift+PgDn" => "article_page_down",
+			"(38)|Up" => "prev_article_or_scroll",
+			"(40)|Down" => "next_article_or_scroll",
+			"*(38)|Shift+Up" => "article_scroll_up",
+			"*(40)|Shift+Down" => "article_scroll_down",
+			"^(38)|Ctrl+Up" => "prev_article_noscroll",
+			"^(40)|Ctrl+Down" => "next_article_noscroll",
+			"/" => "search_dialog",
 			"s" => "toggle_mark",
-			"*s" => "toggle_publ",
+			"S" => "toggle_publ",
 			"u" => "toggle_unread",
-			"*t" => "edit_tags",
+			"T" => "edit_tags",
 			"o" => "open_in_new_window",
 			"c p" => "catchup_below",
 			"c n" => "catchup_above",
-			"*n" => "article_scroll_down",
-			"*p" => "article_scroll_up",
-			"*(38)|Shift+up" => "article_scroll_up",
-			"*(40)|Shift+down" => "article_scroll_down",
-			"a *w" => "toggle_widescreen",
+			"N" => "article_scroll_down",
+			"P" => "article_scroll_up",
+			"a W" => "toggle_widescreen",
 			"a e" => "toggle_embed_original",
 			"e" => "email_article",
 			"a q" => "close_article",
-	//			"article_selection" => array(
 			"a a" => "select_all",
 			"a u" => "select_unread",
-			"a *u" => "select_marked",
+			"a U" => "select_marked",
 			"a p" => "select_published",
 			"a i" => "select_invert",
 			"a n" => "select_none",
-	//			"feed" => array(
 			"f r" => "feed_refresh",
 			"f a" => "feed_unhide_read",
 			"f s" => "feed_subscribe",
@@ -1257,30 +1156,25 @@
 			"f q" => "feed_catchup",
 			"f x" => "feed_reverse",
 			"f g" => "feed_toggle_vgroup",
-			"f *d" => "feed_debug_update",
-			"f *g" => "feed_debug_viewfeed",
-			"f *c" => "toggle_combined_mode",
+			"f D" => "feed_debug_update",
+			"f G" => "feed_debug_viewfeed",
+			"f C" => "toggle_combined_mode",
 			"f c" => "toggle_cdm_expanded",
-			"*q" => "catchup_all",
+			"Q" => "catchup_all",
 			"x" => "cat_toggle_collapse",
-	//			"goto" => array(
 			"g a" => "goto_all",
 			"g f" => "goto_fresh",
 			"g s" => "goto_marked",
 			"g p" => "goto_published",
+			"g r" => "goto_read",
 			"g t" => "goto_tagcloud",
-			"g *p" => "goto_prefs",
-	//			"other" => array(
+			"g P" => "goto_prefs",
 			"r" => "select_article_cursor",
 			"c l" => "create_label",
 			"c f" => "create_filter",
 			"c s" => "collapse_sidebar",
-			"a *n" => "toggle_night_mode",
-			"^(191)|Ctrl+/" => "help_dialog",
+			"?" => "help_dialog",
 		);
-
-		$hotkeys["^(38)|Ctrl-up"] = "prev_article_noscroll";
-		$hotkeys["^(40)|Ctrl-down"] = "next_article_noscroll";
 
 		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_HOTKEY_MAP) as $plugin) {
 			$hotkeys = $plugin->hook_hotkey_map($hotkeys);
@@ -1362,153 +1256,12 @@
 		return $data;
 	}
 
-	function search_to_sql($search, $search_language) {
-
-		$keywords = str_getcsv(trim($search), " ");
-		$query_keywords = array();
-		$search_words = array();
-		$search_query_leftover = array();
-
-		$pdo = Db::pdo();
-
-		if ($search_language)
-			$search_language = $pdo->quote(mb_strtolower($search_language));
-		else
-			$search_language = $pdo->quote("english");
-
-		foreach ($keywords as $k) {
-			if (strpos($k, "-") === 0) {
-				$k = substr($k, 1);
-				$not = "NOT";
-			} else {
-				$not = "";
-			}
-
-			$commandpair = explode(":", mb_strtolower($k), 2);
-
-			switch ($commandpair[0]) {
-				case "title":
-					if ($commandpair[1]) {
-						array_push($query_keywords, "($not (LOWER(ttrss_entries.title) LIKE ".
-							$pdo->quote('%' . mb_strtolower($commandpair[1]) . '%') ."))");
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER('%$k%')
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						array_push($search_words, $k);
-					}
-					break;
-				case "author":
-					if ($commandpair[1]) {
-						array_push($query_keywords, "($not (LOWER(author) LIKE ".
-							$pdo->quote('%' . mb_strtolower($commandpair[1]) . '%')."))");
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER('%$k%')
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						array_push($search_words, $k);
-					}
-					break;
-				case "note":
-					if ($commandpair[1]) {
-						if ($commandpair[1] == "true")
-							array_push($query_keywords, "($not (note IS NOT NULL AND note != ''))");
-						else if ($commandpair[1] == "false")
-							array_push($query_keywords, "($not (note IS NULL OR note = ''))");
-						else
-							array_push($query_keywords, "($not (LOWER(note) LIKE ".
-								$pdo->quote('%' . mb_strtolower($commandpair[1]) . '%')."))");
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						if (!$not) array_push($search_words, $k);
-					}
-					break;
-				case "star":
-
-					if ($commandpair[1]) {
-						if ($commandpair[1] == "true")
-							array_push($query_keywords, "($not (marked = true))");
-						else
-							array_push($query_keywords, "($not (marked = false))");
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						if (!$not) array_push($search_words, $k);
-					}
-					break;
-				case "pub":
-					if ($commandpair[1]) {
-						if ($commandpair[1] == "true")
-							array_push($query_keywords, "($not (published = true))");
-						else
-							array_push($query_keywords, "($not (published = false))");
-
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER('%$k%')
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						if (!$not) array_push($search_words, $k);
-					}
-					break;
-				case "unread":
-					if ($commandpair[1]) {
-						if ($commandpair[1] == "true")
-							array_push($query_keywords, "($not (unread = true))");
-						else
-							array_push($query_keywords, "($not (unread = false))");
-
-					} else {
-						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						if (!$not) array_push($search_words, $k);
-					}
-					break;
-				default:
-					if (strpos($k, "@") === 0) {
-
-						$user_tz_string = get_pref('USER_TIMEZONE', $_SESSION['uid']);
-						$orig_ts = strtotime(substr($k, 1));
-						$k = date("Y-m-d", convert_timestamp($orig_ts, $user_tz_string, 'UTC'));
-
-						//$k = date("Y-m-d", strtotime(substr($k, 1)));
-
-						array_push($query_keywords, "(".SUBSTRING_FOR_DATE."(updated,1,LENGTH('$k')) $not = '$k')");
-					} else {
-
-						if (DB_TYPE == "pgsql") {
-							$k = mb_strtolower($k);
-							array_push($search_query_leftover, $not ? "!$k" : $k);
-						} else {
-							array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
-						}
-
-						if (!$not) array_push($search_words, $k);
-					}
-			}
-		}
-
-		if (count($search_query_leftover) > 0) {
-			$search_query_leftover = $pdo->quote(implode(" & ", $search_query_leftover));
-
-			if (DB_TYPE == "pgsql") {
-				array_push($query_keywords,
-					"(tsvector_combined @@ to_tsquery($search_language, $search_query_leftover))");
-			}
-
-		}
-
-		$search_query_part = implode("AND", $query_keywords);
-
-		return array($search_query_part, $search_words);
-	}
-
 	function iframe_whitelisted($entry) {
-		$whitelist = array("youtube.com", "youtu.be", "vimeo.com", "player.vimeo.com");
-
 		@$src = parse_url($entry->getAttribute("src"), PHP_URL_HOST);
 
 		if ($src) {
-			foreach ($whitelist as $w) {
-				if ($src == $w || $src == "www.$w")
+			foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_IFRAME_WHITELISTED) as $plugin) {
+				if ($plugin->hook_iframe_whitelisted($src))
 					return true;
 			}
 		}
@@ -1516,86 +1269,18 @@
 		return false;
 	}
 
-	// check for locally cached (media) URLs and rewrite to local versions
-	// this is called separately after sanitize() and plugin render article hooks to allow
-	// plugins work on original source URLs used before caching
-
-	function rewrite_cached_urls($str) {
-		$charset_hack = '<head>
-				<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-			</head>';
-
-		$res = trim($str); if (!$res) return '';
-
-		$doc = new DOMDocument();
-		$doc->loadHTML($charset_hack . $res);
-		$xpath = new DOMXPath($doc);
-
-		$entries = $xpath->query('(//img[@src]|//video[@poster]|//video/source[@src]|//audio/source[@src])');
-
-		$need_saving = false;
-
-		foreach ($entries as $entry) {
-
-			if ($entry->hasAttribute('src') || $entry->hasAttribute('poster')) {
-
-				// should be already absolutized because this is called after sanitize()
-				$src = $entry->hasAttribute('poster') ? $entry->getAttribute('poster') : $entry->getAttribute('src');
-				$cached_filename = CACHE_DIR . '/images/' . sha1($src);
-
-				if (file_exists($cached_filename)) {
-
-					// this is strictly cosmetic
-					if ($entry->tagName == 'img') {
-						$suffix = ".png";
-					} else if ($entry->parentNode && $entry->parentNode->tagName == "video") {
-						$suffix = ".mp4";
-					} else if ($entry->parentNode && $entry->parentNode->tagName == "audio") {
-						$suffix = ".ogg";
-					} else {
-						$suffix = "";
-					}
-
-					$src = get_self_url_prefix() . '/public.php?op=cached_url&hash=' . sha1($src) . $suffix;
-
-					if ($entry->hasAttribute('poster'))
-						$entry->setAttribute('poster', $src);
-					else
-						$entry->setAttribute('src', $src);
-
-					$need_saving = true;
-				}
-			}
-		}
-
-		if ($need_saving) {
-			$doc->removeChild($doc->firstChild); //remove doctype
-			$res = $doc->saveHTML();
-		}
-
-		return $res;
-	}
-
 	function sanitize($str, $force_remove_images = false, $owner = false, $site_url = false, $highlight_words = false, $article_id = false) {
 		if (!$owner) $owner = $_SESSION["uid"];
 
 		$res = trim($str); if (!$res) return '';
 
-		$charset_hack = '<head>
-				<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-			</head>';
-
-		$res = trim($res); if (!$res) return '';
-
-		libxml_use_internal_errors(true);
-
 		$doc = new DOMDocument();
-		$doc->loadHTML($charset_hack . $res);
+		$doc->loadHTML('<?xml encoding="UTF-8">' . $res);
 		$xpath = new DOMXPath($doc);
 
 		$rewrite_base_url = $site_url ? $site_url : get_self_url_prefix();
 
-		$entries = $xpath->query('(//a[@href]|//img[@src]|//video/source[@src]|//audio/source[@src])');
+		$entries = $xpath->query('(//a[@href]|//img[@src]|//video/source[@src]|//audio/source[@src]|//picture/source[@src])');
 
 		foreach ($entries as $entry) {
 
@@ -1608,9 +1293,6 @@
 
 			if ($entry->hasAttribute('src')) {
 				$src = rewrite_relative_url($rewrite_base_url, $entry->getAttribute('src'));
-
-				// cache stuff has gone to rewrite_cached_urls()
-
 				$entry->setAttribute('src', $src);
 			}
 
@@ -1689,7 +1371,7 @@
 			'dt', 'em', 'footer', 'figure', 'figcaption',
 			'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'html', 'i',
 			'img', 'ins', 'kbd', 'li', 'main', 'mark', 'nav', 'noscript',
-			'ol', 'p', 'pre', 'q', 'ruby', 'rp', 'rt', 's', 'samp', 'section',
+			'ol', 'p', 'picture', 'pre', 'q', 'ruby', 'rp', 'rt', 's', 'samp', 'section',
 			'small', 'source', 'span', 'strike', 'strong', 'sub', 'summary',
 			'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'time',
 			'tr', 'track', 'tt', 'u', 'ul', 'var', 'wbr', 'video', 'xml:namespace' );
@@ -1799,13 +1481,6 @@
 		return $tmp;
 	}
 
-	function tag_is_valid($tag) {
-		if (!$tag || is_numeric($tag) || mb_strlen($tag) > 250)
-			return false;
-
-		return true;
-	}
-
 	function render_login_form() {
 		header('Cache-Control: public');
 
@@ -1822,20 +1497,6 @@
 		$ts = microtime(true);
 		echo sprintf("<!-- CP[$n] %.4f seconds -->\n", $ts - $s);
 		return $ts;
-	}
-
-	function sanitize_tag($tag) {
-		$tag = trim($tag);
-
-		$tag = mb_strtolower($tag, 'utf-8');
-
-		$tag = preg_replace('/[,\'\"\+\>\<]/', "", $tag);
-
-		if (DB_TYPE == "mysql") {
-			$tag = preg_replace('/[\x{10000}-\x{10FFFF}]/u', "\xEF\xBF\xBD", $tag);
-		}
-
-		return $tag;
 	}
 
 	function is_server_https() {
@@ -1865,283 +1526,10 @@
 		}
 	} // function encrypt_password
 
-	function load_filters($feed_id, $owner_uid) {
-		$filters = array();
-
-		$feed_id = (int) $feed_id;
-		$cat_id = (int)Feeds::getFeedCategory($feed_id);
-
-		if ($cat_id == 0)
-			$null_cat_qpart = "cat_id IS NULL OR";
-		else
-			$null_cat_qpart = "";
-
-		$pdo = Db::pdo();
-
-		$sth = $pdo->prepare("SELECT * FROM ttrss_filters2 WHERE
-				owner_uid = ? AND enabled = true ORDER BY order_id, title");
-		$sth->execute([$owner_uid]);
-
-		$check_cats = array_merge(
-			Feeds::getParentCategories($cat_id, $owner_uid),
-			[$cat_id]);
-
-		$check_cats_str = join(",", $check_cats);
-		$check_cats_fullids = array_map(function($a) { return "CAT:$a"; }, $check_cats);
-
-		while ($line = $sth->fetch()) {
-			$filter_id = $line["id"];
-
-			$match_any_rule = sql_bool_to_bool($line["match_any_rule"]);
-
-			$sth2 = $pdo->prepare("SELECT
-					r.reg_exp, r.inverse, r.feed_id, r.cat_id, r.cat_filter, r.match_on, t.name AS type_name
-					FROM ttrss_filters2_rules AS r,
-					ttrss_filter_types AS t
-					WHERE
-						(match_on IS NOT NULL OR
-						  (($null_cat_qpart (cat_id IS NULL AND cat_filter = false) OR cat_id IN ($check_cats_str)) AND
-						  (feed_id IS NULL OR feed_id = ?))) AND
-						filter_type = t.id AND filter_id = ?");
-			$sth2->execute([$feed_id, $filter_id]);
-
-			$rules = array();
-			$actions = array();
-
-			while ($rule_line = $sth2->fetch()) {
-	#				print_r($rule_line);
-
-				if ($rule_line["match_on"]) {
-					$match_on = json_decode($rule_line["match_on"], true);
-
-					if (in_array("0", $match_on) || in_array($feed_id, $match_on) || count(array_intersect($check_cats_fullids, $match_on)) > 0) {
-
-						$rule = array();
-						$rule["reg_exp"] = $rule_line["reg_exp"];
-						$rule["type"] = $rule_line["type_name"];
-						$rule["inverse"] = sql_bool_to_bool($rule_line["inverse"]);
-
-						array_push($rules, $rule);
-					} else if (!$match_any_rule) {
-						// this filter contains a rule that doesn't match to this feed/category combination
-						// thus filter has to be rejected
-
-						$rules = [];
-						break;
-					}
-
-				} else {
-
-					$rule = array();
-					$rule["reg_exp"] = $rule_line["reg_exp"];
-					$rule["type"] = $rule_line["type_name"];
-					$rule["inverse"] = sql_bool_to_bool($rule_line["inverse"]);
-
-					array_push($rules, $rule);
-				}
-			}
-
-			if (count($rules) > 0) {
-				$sth2 = $pdo->prepare("SELECT a.action_param,t.name AS type_name
-						FROM ttrss_filters2_actions AS a,
-						ttrss_filter_actions AS t
-						WHERE
-							action_id = t.id AND filter_id = ?");
-				$sth2->execute([$filter_id]);
-
-				while ($action_line = $sth2->fetch()) {
-					#				print_r($action_line);
-
-					$action = array();
-					$action["type"] = $action_line["type_name"];
-					$action["param"] = $action_line["action_param"];
-
-					array_push($actions, $action);
-				}
-			}
-
-			$filter = [];
-			$filter["id"] = $filter_id;
-			$filter["match_any_rule"] = sql_bool_to_bool($line["match_any_rule"]);
-			$filter["inverse"] = sql_bool_to_bool($line["inverse"]);
-			$filter["rules"] = $rules;
-			$filter["actions"] = $actions;
-
-			if (count($rules) > 0 && count($actions) > 0) {
-				array_push($filters, $filter);
-			}
-		}
-
-		return $filters;
-	}
-
 	function init_plugins() {
 		PluginHost::getInstance()->load(PLUGINS, PluginHost::KIND_ALL);
 
 		return true;
-	}
-
-	function add_feed_category($feed_cat, $parent_cat_id = false) {
-
-		if (!$feed_cat) return false;
-
-		$feed_cat = mb_substr($feed_cat, 0, 250);
-		if (!$parent_cat_id) $parent_cat_id = null;
-
-		$pdo = Db::pdo();
-		$tr_in_progress = false;
-
-		try {
-			$pdo->beginTransaction();
-		} catch (Exception $e) {
-			$tr_in_progress = true;
-		}
-
-		$sth = $pdo->prepare("SELECT id FROM ttrss_feed_categories
-				WHERE (parent_cat = :parent OR (:parent IS NULL AND parent_cat IS NULL))
-				AND title = :title AND owner_uid = :uid");
-		$sth->execute([':parent' => $parent_cat_id, ':title' => $feed_cat, ':uid' => $_SESSION['uid']]);
-
-		if (!$sth->fetch()) {
-
-			$sth = $pdo->prepare("INSERT INTO ttrss_feed_categories (owner_uid,title,parent_cat)
-					VALUES (?, ?, ?)");
-			$sth->execute([$_SESSION['uid'], $feed_cat, $parent_cat_id]);
-
-			if (!$tr_in_progress) $pdo->commit();
-
-			return true;
-		}
-
-		$pdo->commit();
-
-		return false;
-	}
-
-	/**
-	 * Fixes incomplete URLs by prepending "http://".
-	 * Also replaces feed:// with http://, and
-	 * prepends a trailing slash if the url is a domain name only.
-	 *
-	 * @param string $url Possibly incomplete URL
-	 *
-	 * @return string Fixed URL.
-	 */
-	function fix_url($url) {
-
-		// support schema-less urls
-		if (strpos($url, '//') === 0) {
-			$url = 'https:' . $url;
-		}
-
-		if (strpos($url, '://') === false) {
-			$url = 'http://' . $url;
-		} else if (substr($url, 0, 5) == 'feed:') {
-			$url = 'http:' . substr($url, 5);
-		}
-
-		//prepend slash if the URL has no slash in it
-		// "http://www.example" -> "http://www.example/"
-		if (strpos($url, '/', strpos($url, ':') + 3) === false) {
-			$url .= '/';
-		}
-
-		//convert IDNA hostname to punycode if possible
-		if (function_exists("idn_to_ascii")) {
-			$parts = parse_url($url);
-			if (mb_detect_encoding($parts['host']) != 'ASCII')
-			{
-				$parts['host'] = idn_to_ascii($parts['host']);
-				$url = build_url($parts);
-			}
-		}
-
-		if ($url != "http:///")
-			return $url;
-		else
-			return '';
-	}
-
-	function validate_feed_url($url) {
-		$parts = parse_url($url);
-
-		return ($parts['scheme'] == 'http' || $parts['scheme'] == 'feed' || $parts['scheme'] == 'https');
-
-	}
-
-	/* function save_email_address($email) {
-		// FIXME: implement persistent storage of emails
-
-		if (!$_SESSION['stored_emails'])
-			$_SESSION['stored_emails'] = array();
-
-		if (!in_array($email, $_SESSION['stored_emails']))
-			array_push($_SESSION['stored_emails'], $email);
-	} */
-
-
-	function get_feed_access_key($feed_id, $is_cat, $owner_uid = false) {
-
-		if (!$owner_uid) $owner_uid = $_SESSION["uid"];
-
-		$is_cat = bool_to_sql_bool($is_cat);
-
-		$pdo = Db::pdo();
-
-		$sth = $pdo->prepare("SELECT access_key FROM ttrss_access_keys
-				WHERE feed_id = ? AND is_cat = ?
-				AND owner_uid = ?");
-		$sth->execute([$feed_id, $is_cat, $owner_uid]);
-
-		if ($row = $sth->fetch()) {
-			return $row["access_key"];
-		} else {
-			$key = uniqid_short();
-
-			$sth = $pdo->prepare("INSERT INTO ttrss_access_keys
-					(access_key, feed_id, is_cat, owner_uid)
-					VALUES (?, ?, ?, ?)");
-
-			$sth->execute([$key, $feed_id, $is_cat, $owner_uid]);
-
-			return $key;
-		}
-	}
-
-	function get_feeds_from_html($url, $content)
-	{
-		$url     = fix_url($url);
-		$baseUrl = substr($url, 0, strrpos($url, '/') + 1);
-
-		libxml_use_internal_errors(true);
-
-		$doc = new DOMDocument();
-		$doc->loadHTML($content);
-		$xpath = new DOMXPath($doc);
-		$entries = $xpath->query('/html/head/link[@rel="alternate" and '.
-			'(contains(@type,"rss") or contains(@type,"atom"))]|/html/head/link[@rel="feed"]');
-		$feedUrls = array();
-		foreach ($entries as $entry) {
-			if ($entry->hasAttribute('href')) {
-				$title = $entry->getAttribute('title');
-				if ($title == '') {
-					$title = $entry->getAttribute('type');
-				}
-				$feedUrl = rewrite_relative_url(
-					$baseUrl, $entry->getAttribute('href')
-				);
-				$feedUrls[$feedUrl] = $title;
-			}
-		}
-		return $feedUrls;
-	}
-
-	function is_html($content) {
-		return preg_match("/<html|DOCTYPE html/i", substr($content, 0, 100)) !== 0;
-	}
-
-	function url_is_html($url, $login = false, $pass = false) {
-		return is_html(fetch_file_contents($url, false, $login, $pass));
 	}
 
 	function build_url($parts) {
@@ -2196,62 +1584,18 @@
 		}
 	}
 
-	function cleanup_tags($days = 14, $limit = 1000) {
-
-		$days = (int) $days;
-
-		if (DB_TYPE == "pgsql") {
-			$interval_query = "date_updated < NOW() - INTERVAL '$days days'";
-		} else if (DB_TYPE == "mysql") {
-			$interval_query = "date_updated < DATE_SUB(NOW(), INTERVAL $days DAY)";
-		}
-
-		$tags_deleted = 0;
-
-		$pdo = Db::pdo();
-
-		while ($limit > 0) {
-			$limit_part = 500;
-
-			$sth = $pdo->prepare("SELECT ttrss_tags.id AS id
-					FROM ttrss_tags, ttrss_user_entries, ttrss_entries
-					WHERE post_int_id = int_id AND $interval_query AND
-					ref_id = ttrss_entries.id AND tag_cache != '' LIMIT ?");
-			$sth->execute([$limit]);
-
-			$ids = array();
-
-			while ($line = $sth->fetch()) {
-				array_push($ids, $line['id']);
-			}
-
-			if (count($ids) > 0) {
-				$ids = join(",", $ids);
-
-				$usth = $pdo->query("DELETE FROM ttrss_tags WHERE id IN ($ids)");
-				$tags_deleted = $usth->rowCount();
-			} else {
-				break;
-			}
-
-			$limit -= $limit_part;
-		}
-
-		return $tags_deleted;
-	}
-
 	function print_user_stylesheet() {
 		$value = get_pref('USER_STYLESHEET');
 
 		if ($value) {
-			print "<style type=\"text/css\">";
+			print "<style type='text/css' id='user_css_style'>";
 			print str_replace("<br/>", "\n", $value);
 			print "</style>";
 		}
 
 	}
 
-	function filter_to_sql($filter, $owner_uid) {
+	/* function filter_to_sql($filter, $owner_uid) {
 		$query = array();
 
 		$pdo = Db::pdo();
@@ -2337,7 +1681,7 @@
 		if ($filter['inverse']) $fullquery = "(NOT $fullquery)";
 
 		return $fullquery;
-	}
+	} */
 
 	if (!function_exists('gzdecode')) {
 		function gzdecode($string) { // no support for 2nd argument
@@ -2403,18 +1747,23 @@
 				return __((parseInt(n) > 1) ? msg2 : msg1);
 			}';
 
-		$l10n = _get_reader();
+		global $text_domains;
 
-		for ($i = 0; $i < $l10n->total; $i++) {
-			$orig = $l10n->get_original_string($i);
-			if(strpos($orig, "\000") !== FALSE) { // Plural forms
-				$key = explode(chr(0), $orig);
-				print T_js_decl($key[0], _ngettext($key[0], $key[1], 1)); // Singular
-				print T_js_decl($key[1], _ngettext($key[0], $key[1], 2)); // Plural
-			} else {
-				$translation = __($orig);
-				print T_js_decl($orig, $translation);
+		foreach (array_keys($text_domains) as $domain) {
+			$l10n = _get_reader($domain);
+
+			for ($i = 0; $i < $l10n->total; $i++) {
+				$orig = $l10n->get_original_string($i);
+				if(strpos($orig, "\000") !== FALSE) { // Plural forms
+					$key = explode(chr(0), $orig);
+					print T_js_decl($key[0], _ngettext($key[0], $key[1], 1)); // Singular
+					print T_js_decl($key[1], _ngettext($key[0], $key[1], 2)); // Plural
+				} else {
+					$translation = _dgettext($domain,$orig);
+					print T_js_decl($orig, $translation);
+				}
 			}
+
 		}
 	}
 
@@ -2520,29 +1869,6 @@
 		}
 	}
 
-	function check_mysql_tables() {
-		$pdo = Db::pdo();
-
-		$sth = $pdo->prepare("SELECT engine, table_name FROM information_schema.tables WHERE
-			table_schema = ? AND table_name LIKE 'ttrss_%' AND engine != 'InnoDB'");
-		$sth->execute([DB_NAME]);
-
-		$bad_tables = [];
-
-		while ($line = $sth->fetch()) {
-			array_push($bad_tables, $line);
-		}
-
-		return $bad_tables;
-	}
-
-	function validate_field($string, $allowed, $default = "") {
-		if (in_array($string, $allowed))
-			return $string;
-		else
-			return $default;
-	}
-
 	function arr_qmarks($arr) {
 		return str_repeat('?,', count($arr) - 1) . '?';
 	}
@@ -2557,4 +1883,60 @@
 		}
 
 		return $ts;
+	}
+
+	/* for package maintainers who don't use git: if version_static.txt exists in tt-rss root
+		directory, its contents are displayed instead of git commit-based version, this could be generated
+		based on source git tree commit used when creating the package */
+
+	function get_version(&$git_commit = false, &$git_timestamp = false) {
+		global $ttrss_version;
+
+		if (is_array($ttrss_version) && isset($ttrss_version['version'])) {
+			$git_commit = $ttrss_version['commit'];
+			$git_timestamp = $ttrss_version['timestamp'];
+
+			return $ttrss_version['version'];
+		} else {
+			$ttrss_version = [];
+		}
+
+		$ttrss_version['version'] = "UNKNOWN (Unsupported)";
+
+		date_default_timezone_set('UTC');
+		$root_dir = dirname(dirname(__FILE__));
+
+		if ('\\' === DIRECTORY_SEPARATOR) {
+			$ttrss_version['version'] = "UNKNOWN (Unsupported, Windows)";
+		} else if (PHP_OS === "Darwin") {
+			$ttrss_version['version'] = "UNKNOWN (Unsupported, Darwin)";
+		} else if (file_exists("$root_dir/version_static.txt")) {
+			$ttrss_version['version'] = trim(file_get_contents("$root_dir/version_static.txt")) . " (Unsupported)";
+		} else if (is_dir("$root_dir/.git")) {
+			$rc = 0;
+			$output = [];
+
+			$cwd = getcwd();
+
+			chdir($root_dir);
+			exec('git log --pretty='.escapeshellarg('%ct %h').' -n1 HEAD 2>&1', $output, $rc);
+			chdir($cwd);
+
+			if ($rc == 0) {
+				if (is_array($output) && count($output) > 0) {
+					list ($timestamp, $commit) = explode(" ", $output[0], 2);
+
+					$git_commit = $commit;
+					$git_timestamp = $timestamp;
+
+					$ttrss_version['version'] = strftime("%y.%m", $timestamp) . "-$commit";
+					$ttrss_version['commit'] = $commit;
+					$ttrss_version['timestamp'] = $timestamp;
+				}
+			} else {
+				user_error("Unable to determine version (using $root_dir): " . implode("\n", $output), E_USER_WARNING);
+			}
+		}
+
+		return $ttrss_version['version'];
 	}

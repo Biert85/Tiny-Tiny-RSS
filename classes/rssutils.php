@@ -19,51 +19,9 @@ class RSSUtils {
 		return preg_replace('/[\x{10000}-\x{10FFFF}]/u', "\xEF\xBF\xBD", $str);
 	}
 
-	static function update_feedbrowser_cache() {
-
+	static function cleanup_feed_browser() {
 		$pdo = Db::pdo();
-
-		$sth = $pdo->query("SELECT feed_url, site_url, title, COUNT(id) AS subscribers
-			FROM ttrss_feeds WHERE feed_url NOT IN (SELECT feed_url FROM ttrss_feeds
-				WHERE private IS true OR auth_login != '' OR auth_pass != '' OR feed_url LIKE '%:%@%/%')
-				GROUP BY feed_url, site_url, title ORDER BY subscribers DESC LIMIT 1000");
-
-		$pdo->beginTransaction();
-
 		$pdo->query("DELETE FROM ttrss_feedbrowser_cache");
-
-		$count = 0;
-
-		while ($line = $sth->fetch()) {
-
-			$subscribers = $line["subscribers"];
-			$feed_url = $line["feed_url"];
-			$title = $line["title"];
-			$site_url = $line["site_url"];
-
-			$tmph = $pdo->prepare("SELECT subscribers FROM
-				ttrss_feedbrowser_cache WHERE feed_url = ?");
-			$tmph->execute([$feed_url]);
-
-			if (!$tmph->fetch()) {
-
-				$tmph = $pdo->prepare("INSERT INTO ttrss_feedbrowser_cache
-					(feed_url, site_url, title, subscribers)
-					VALUES
-					(?, ?, ?, ?)");
-
-				$tmph->execute([$feed_url, $site_url, $title, $subscribers]);
-
-				++$count;
-
-			}
-
-		}
-
-		$pdo->commit();
-
-		return $count;
-
 	}
 
 	static function update_daemon_common($limit = DAEMON_FEED_LIMIT) {
@@ -301,11 +259,13 @@ class RSSUtils {
 	 */
 	static function update_rss_feed($feed, $no_cache = false) {
 
+		reset_fetch_domain_quota();
+
 		Debug::log("start", Debug::$LOG_VERBOSE);
 
 		$pdo = Db::pdo();
 
-		$sth = $pdo->prepare("SELECT title FROM ttrss_feeds WHERE id = ?");
+		$sth = $pdo->prepare("SELECT title, site_url FROM ttrss_feeds WHERE id = ?");
 		$sth->execute([$feed]);
 
 		if (!$row = $sth->fetch()) {
@@ -315,11 +275,12 @@ class RSSUtils {
 		}
 
 		$title = $row["title"];
+		$site_url = $row["site_url"];
 
 		// feed was batch-subscribed or something, we need to get basic info
 		// this is not optimal currently as it fetches stuff separately TODO: optimize
-		if ($title == "[Unknown]") {
-			Debug::log("setting basic feed info for $feed...");
+		if ($title == "[Unknown]" || !$title || !$site_url) {
+			Debug::log("setting basic feed info for $feed [$title, $site_url]...");
 			RSSUtils::set_basic_feed_info($feed);
 		}
 
@@ -349,7 +310,12 @@ class RSSUtils {
 			$fetch_url = $row["feed_url"];
 
 			$feed_language = mb_strtolower($row["feed_language"]);
-			if (!$feed_language) $feed_language = 'english';
+
+			if (!$feed_language)
+				$feed_language = mb_strtolower(get_pref('DEFAULT_SEARCH_LANGUAGE', $owner_uid));
+
+			if (!$feed_language)
+				$feed_language = 'simple';
 
 		} else {
 			return false;
@@ -371,8 +337,19 @@ class RSSUtils {
 		$force_refetch = isset($_REQUEST["force_refetch"]);
 		$feed_data = "";
 
+		Debug::log("running HOOK_FETCH_FEED handlers...", Debug::$LOG_VERBOSE);
+
 		foreach ($pluginhost->get_hooks(PluginHost::HOOK_FETCH_FEED) as $plugin) {
+			Debug::log("... " . get_class($plugin), Debug::$LOG_VERBOSE);
+			$start = microtime(true);
 			$feed_data = $plugin->hook_fetch_feed($feed_data, $fetch_url, $owner_uid, $feed, 0, $auth_login, $auth_pass);
+			Debug::log(sprintf("=== %.4f (sec)", microtime(true) - $start), Debug::$LOG_VERBOSE);
+		}
+
+		if ($feed_data) {
+			Debug::log("feed data has been modified by a plugin.", Debug::$LOG_VERBOSE);
+		} else {
+			Debug::log("feed data has not been modified by a plugin.", Debug::$LOG_VERBOSE);
 		}
 
 		// try cache
@@ -464,8 +441,20 @@ class RSSUtils {
 			return;
 		}
 
+		Debug::log("running HOOK_FEED_FETCHED handlers...", Debug::$LOG_VERBOSE);
+		$feed_data_checksum = md5($feed_data);
+
 		foreach ($pluginhost->get_hooks(PluginHost::HOOK_FEED_FETCHED) as $plugin) {
+			Debug::log("... " . get_class($plugin), Debug::$LOG_VERBOSE);
+			$start = microtime(true);
 			$feed_data = $plugin->hook_feed_fetched($feed_data, $fetch_url, $owner_uid, $feed);
+			Debug::log(sprintf("=== %.4f (sec)", microtime(true) - $start), Debug::$LOG_VERBOSE);
+		}
+
+		if (md5($feed_data) != $feed_data_checksum) {
+			Debug::log("feed data has been modified by a plugin.", Debug::$LOG_VERBOSE);
+		} else {
+			Debug::log("feed data has not been modified by a plugin.", Debug::$LOG_VERBOSE);
 		}
 
 		$rss = new FeedParser($feed_data);
@@ -473,8 +462,16 @@ class RSSUtils {
 
 		if (!$rss->error()) {
 
+			Debug::log("running HOOK_FEED_PARSED handlers...", Debug::$LOG_VERBOSE);
+
 			// We use local pluginhost here because we need to load different per-user feed plugins
-			$pluginhost->run_hooks(PluginHost::HOOK_FEED_PARSED, "hook_feed_parsed", $rss);
+
+			foreach ($pluginhost->get_hooks(PluginHost::HOOK_FEED_PARSED) as $plugin) {
+				Debug::log("... " . get_class($plugin), Debug::$LOG_VERBOSE);
+				$start = microtime(true);
+				$plugin->hook_feed_parsed($rss);
+				Debug::log(sprintf("=== %.4f (sec)", microtime(true) - $start), Debug::$LOG_VERBOSE);
+			}
 
 			Debug::log("language: $feed_language", Debug::$LOG_VERBOSE);
 			Debug::log("processing feed data...", Debug::$LOG_VERBOSE);
@@ -543,7 +540,7 @@ class RSSUtils {
 
 			Debug::log("loading filters & labels...", Debug::$LOG_VERBOSE);
 
-			$filters = load_filters($feed, $owner_uid);
+			$filters = RSSUtils::load_filters($feed, $owner_uid);
 
 			if (Debug::get_loglevel() >= Debug::$LOG_EXTENDED) {
 				print_r($filters);
@@ -595,17 +592,9 @@ class RSSUtils {
 
 				Debug::log("guid $entry_guid / $entry_guid_hashed", Debug::$LOG_VERBOSE);
 
-				$entry_timestamp = strip_tags($item->get_date());
+				$entry_timestamp = (int)$item->get_date();
 
 				Debug::log("orig date: " . $item->get_date(), Debug::$LOG_VERBOSE);
-
-				if ($entry_timestamp == -1 || !$entry_timestamp || $entry_timestamp > time()) {
-					$entry_timestamp = time();
-				}
-
-				$entry_timestamp_fmt = strftime("%Y/%m/%d %H:%M:%S", $entry_timestamp);
-
-				Debug::log("date $entry_timestamp [$entry_timestamp_fmt]", Debug::$LOG_VERBOSE);
 
 				$entry_title = strip_tags($item->get_title());
 
@@ -635,31 +624,10 @@ class RSSUtils {
 				$entry_guid = mb_substr($entry_guid, 0, 245);
 
 				Debug::log("author $entry_author", Debug::$LOG_VERBOSE);
-				Debug::log("num_comments: $num_comments", Debug::$LOG_VERBOSE);
 				Debug::log("looking for tags...", Debug::$LOG_VERBOSE);
 
-				// parse <category> entries into tags
-
-				$additional_tags = array();
-
-				$additional_tags_src = $item->get_categories();
-
-				if (is_array($additional_tags_src)) {
-					foreach ($additional_tags_src as $tobj) {
-						array_push($additional_tags, $tobj);
-					}
-				}
-
-				$entry_tags = array_unique($additional_tags);
-
-				for ($i = 0; $i < count($entry_tags); $i++) {
-					$entry_tags[$i] = mb_strtolower($entry_tags[$i], 'utf-8');
-
-					// we don't support numeric tags, let's prefix them
-					if (is_numeric($entry_tags[$i])) $entry_tags[$i] = 't:' . $entry_tags[$i];
-				}
-
-				Debug::log("tags found: " . join(",", $entry_tags), Debug::$LOG_VERBOSE);
+				$entry_tags = $item->get_categories();
+				Debug::log("tags found: " . join(", ", $entry_tags), Debug::$LOG_VERBOSE);
 
 				Debug::log("done collecting data.", Debug::$LOG_VERBOSE);
 
@@ -692,7 +660,8 @@ class RSSUtils {
 					"force_catchup" => false, // ugly hack for the time being
 					"score_modifier" => 0, // no previous value, plugin should recalculate score modifier based on content if needed
 					"language" => $entry_language,
-					"num_comments" => $num_comments, // read only
+					"timestamp" => $entry_timestamp,
+					"num_comments" => $num_comments,
 					"feed" => array("id" => $feed,
 						"fetch_url" => $fetch_url,
 						"site_url" => $site_url,
@@ -770,7 +739,7 @@ class RSSUtils {
 				if (count($matched_filter_ids) > 0) {
 					$filter_ids_qmarks = arr_qmarks($matched_filter_ids);
 
-					$fsth = $pdo->prepare("UPDATE ttrss_filters2 SET last_triggered = NOW() WHERE 
+					$fsth = $pdo->prepare("UPDATE ttrss_filters2 SET last_triggered = NOW() WHERE
 							   id IN ($filter_ids_qmarks) AND owner_uid = ?");
 
 					$fsth->execute(array_merge($matched_filter_ids, [$owner_uid]));
@@ -833,6 +802,17 @@ class RSSUtils {
 				$article_labels = $article["labels"];
 				$entry_score_modifier = (int) $article["score_modifier"];
 				$entry_language = $article["language"];
+				$entry_timestamp = $article["timestamp"];
+				$num_comments = $article["num_comments"];
+
+				if ($entry_timestamp == -1 || !$entry_timestamp || $entry_timestamp > time()) {
+					$entry_timestamp = time();
+				}
+
+				$entry_timestamp_fmt = strftime("%Y/%m/%d %H:%M:%S", $entry_timestamp);
+
+				Debug::log("date $entry_timestamp [$entry_timestamp_fmt]", Debug::$LOG_VERBOSE);
+				Debug::log("num_comments: $num_comments", Debug::$LOG_VERBOSE);
 
 				if (Debug::get_loglevel() >= Debug::$LOG_EXTENDED) {
 					Debug::log("article labels:", Debug::$LOG_VERBOSE);
@@ -844,7 +824,7 @@ class RSSUtils {
 
 				Debug::log("force catchup: $entry_force_catchup", Debug::$LOG_VERBOSE);
 
-				if ($cache_images && is_writable(CACHE_DIR . '/images'))
+				if ($cache_images)
 					RSSUtils::cache_media($entry_content, $site_url);
 
 				$csth = $pdo->prepare("SELECT id FROM ttrss_entries
@@ -907,7 +887,7 @@ class RSSUtils {
 					$entry_ref_id = $ref_id;
 
 					if (RSSUtils::find_article_filter($article_filters, "filter")) {
-						Debug::log("article is filtered out, nothing to do.");
+						Debug::log("article is filtered out, nothing to do.", Debug::$LOG_VERBOSE);
 						$pdo->commit();
 						continue;
 					}
@@ -1069,7 +1049,7 @@ class RSSUtils {
 					}
 				}
 
-				if ($cache_images && is_writable(CACHE_DIR . '/images'))
+				if ($cache_images)
 					RSSUtils::cache_enclosures($enclosures, $site_url);
 
 				if (Debug::get_loglevel() >= Debug::$LOG_EXTENDED) {
@@ -1107,9 +1087,7 @@ class RSSUtils {
 						$manual_tags = trim_array(explode(",", $f["param"]));
 
 						foreach ($manual_tags as $tag) {
-							if (tag_is_valid($tag)) {
-								array_push($entry_tags, $tag);
-							}
+							array_push($entry_tags, $tag);
 						}
 					}
 				}
@@ -1122,19 +1100,17 @@ class RSSUtils {
 				$filtered_tags = array();
 				$tags_to_cache = array();
 
-				if ($entry_tags && is_array($entry_tags)) {
-					foreach ($entry_tags as $tag) {
-						if (array_search($tag, $boring_tags) === false) {
-							array_push($filtered_tags, $tag);
-						}
+				foreach ($entry_tags as $tag) {
+					if (array_search($tag, $boring_tags) === false) {
+						array_push($filtered_tags, $tag);
 					}
 				}
 
 				$filtered_tags = array_unique($filtered_tags);
 
-				if (Debug::get_loglevel() >= Debug::$LOG_EXTENDED) {
-					Debug::log("filtered article tags:", Debug::$LOG_VERBOSE);
-					print_r($filtered_tags);
+				if (Debug::get_loglevel() >= Debug::$LOG_VERBOSE) {
+					Debug::log("filtered tags: " . implode(", ", $filtered_tags), Debug::$LOG_VERBOSE);
+
 				}
 
 				// Save article tags in the database
@@ -1149,12 +1125,9 @@ class RSSUtils {
 									(owner_uid,tag_name,post_int_id)
 									VALUES (?, ?, ?)");
 
+					$filtered_tags = FeedItem_Common::normalize_categories($filtered_tags);
+
 					foreach ($filtered_tags as $tag) {
-
-						$tag = sanitize_tag($tag);
-
-						if (!tag_is_valid($tag)) continue;
-
 						$tsth->execute([$tag, $entry_int_id, $owner_uid]);
 
 						if (!$tsth->fetch()) {
@@ -1165,9 +1138,6 @@ class RSSUtils {
 					}
 
 					/* update the cache */
-
-					$tags_to_cache = array_unique($tags_to_cache);
-
 					$tags_str = join(",", $tags_to_cache);
 
 					$tsth = $pdo->prepare("UPDATE ttrss_user_entries
@@ -1183,7 +1153,7 @@ class RSSUtils {
 
 			Debug::log("purging feed...", Debug::$LOG_VERBOSE);
 
-			purge_feed($feed, 0);
+			Feeds::purge_feed($feed, 0);
 
 			$sth = $pdo->prepare("UPDATE ttrss_feeds
 				SET last_updated = NOW(), last_unconditional = NOW(), last_error = '' WHERE id = ?");
@@ -1206,69 +1176,88 @@ class RSSUtils {
 			$sth->execute([$error_msg, $feed]);
 
 			unset($rss);
+
+			Debug::log("update failed.", Debug::$LOG_VERBOSE);
 			return false;
 		}
 
-		Debug::log("done", Debug::$LOG_VERBOSE);
+		Debug::log("update done.", Debug::$LOG_VERBOSE);
 
 		return true;
 	}
 
 	static function cache_enclosures($enclosures, $site_url) {
-		foreach ($enclosures as $enc) {
+		$cache = new DiskCache("images");
 
-			if (preg_match("/(image|audio|video)/", $enc[1])) {
+		if ($cache->isWritable()) {
+			foreach ($enclosures as $enc) {
 
-				$src = rewrite_relative_url($site_url, $enc[0]);
+				if (preg_match("/(image|audio|video)/", $enc[1])) {
+					$src = rewrite_relative_url($site_url, $enc[0]);
 
-				$local_filename = CACHE_DIR . "/images/" . sha1($src);
+					$local_filename = sha1($src);
 
-				Debug::log("cache_enclosures: downloading: $src to $local_filename", Debug::$LOG_VERBOSE);
+					Debug::log("cache_enclosures: downloading: $src to $local_filename", Debug::$LOG_VERBOSE);
 
-				if (!file_exists($local_filename)) {
-					$file_content = fetch_file_contents($src);
+					if (!$cache->exists($local_filename)) {
 
-					if ($file_content && strlen($file_content) > MIN_CACHE_FILE_SIZE) {
-						file_put_contents($local_filename, $file_content);
+						global $fetch_last_error_code;
+						global $fetch_last_error;
+
+						$file_content = fetch_file_contents(array("url" => $src,
+							"http_referrer" => $src,
+							"max_size" => MAX_CACHE_FILE_SIZE));
+
+						if ($file_content) {
+							$cache->put($local_filename, $file_content);
+						} else {
+							Debug::log("cache_enclosures: failed with $fetch_last_error_code: $fetch_last_error");
+						}
+					} else if (is_writable($local_filename)) {
+						$cache->touch($local_filename);
 					}
-				} else if (is_writable($local_filename)) {
-					touch($local_filename);
 				}
 			}
 		}
 	}
 
 	static function cache_media($html, $site_url) {
-		libxml_use_internal_errors(true);
+		$cache = new DiskCache("images");
 
-		$charset_hack = '<head>
-			<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-		</head>';
+		if ($cache->isWritable()) {
+			$doc = new DOMDocument();
+			if ($doc->loadHTML($html)) {
+				$xpath = new DOMXPath($doc);
 
-		$doc = new DOMDocument();
-		$doc->loadHTML($charset_hack . $html);
-		$xpath = new DOMXPath($doc);
+				$entries = $xpath->query('(//img[@src])|(//video/source[@src])|(//audio/source[@src])');
 
-		$entries = $xpath->query('(//img[@src])|(//video/source[@src])|(//audio/source[@src])');
+				foreach ($entries as $entry) {
+					if ($entry->hasAttribute('src') && strpos($entry->getAttribute('src'), "data:") !== 0) {
+						$src = rewrite_relative_url($site_url, $entry->getAttribute('src'));
 
-		foreach ($entries as $entry) {
-			if ($entry->hasAttribute('src') && strpos($entry->getAttribute('src'), "data:") !== 0) {
-				$src = rewrite_relative_url($site_url, $entry->getAttribute('src'));
+						$local_filename = sha1($src);
 
-				$local_filename = CACHE_DIR . "/images/" . sha1($src);
+						Debug::log("cache_media: checking $src", Debug::$LOG_VERBOSE);
 
-				Debug::log("cache_media: checking $src", Debug::$LOG_VERBOSE);
+						if (!$cache->exists($local_filename)) {
+							Debug::log("cache_media: downloading: $src to $local_filename", Debug::$LOG_VERBOSE);
 
-				if (!file_exists($local_filename)) {
-					Debug::log("cache_media: downloading: $src to $local_filename", Debug::$LOG_VERBOSE);
+							global $fetch_last_error_code;
+							global $fetch_last_error;
 
-					$file_content = fetch_file_contents($src);
+							$file_content = fetch_file_contents(array("url" => $src,
+								"http_referrer" => $src,
+								"max_size" => MAX_CACHE_FILE_SIZE));
 
-					if ($file_content && strlen($file_content) > MIN_CACHE_FILE_SIZE) {
-						file_put_contents($local_filename, $file_content);
+							if ($file_content) {
+								$cache->put($local_filename, $file_content);
+							} else {
+								Debug::log("cache_media: failed with $fetch_last_error_code: $fetch_last_error");
+							}
+						} else if ($cache->isWritable($local_filename)) {
+							$cache->touch($local_filename);
+						}
 					}
-				} else if (is_writable($local_filename)) {
-					touch($local_filename);
 				}
 			}
 		}
@@ -1285,6 +1274,20 @@ class RSSUtils {
 		} else {
 			$pdo->query("DELETE FROM ttrss_error_log
 				WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)");
+		}
+	}
+
+	static function expire_feed_archive() {
+		Debug::log("Removing old archived feeds...");
+
+		$pdo = Db::pdo();
+
+		if (DB_TYPE == "pgsql") {
+			$pdo->query("DELETE FROM ttrss_archived_feeds
+				WHERE created < NOW() - INTERVAL '1 month'");
+		} else {
+			$pdo->query("DELETE FROM ttrss_archived_feeds
+				WHERE created < DATE_SUB(NOW(), INTERVAL 1 MONTH)");
 		}
 	}
 
@@ -1307,32 +1310,6 @@ class RSSUtils {
 		}
 
 		Debug::log("Removed $num_deleted old lock files.");
-	}
-
-	static function expire_cached_files() {
-		foreach (array("feeds", "images", "export", "upload") as $dir) {
-			$cache_dir = CACHE_DIR . "/$dir";
-
-			Debug::log("Expiring $cache_dir", Debug::$LOG_VERBOSE);
-
-			$num_deleted = 0;
-
-			if (is_writable($cache_dir)) {
-				$files = glob("$cache_dir/*");
-
-				if ($files) {
-					foreach ($files as $file) {
-						if (time() - filemtime($file) > 86400*CACHE_MAX_DAYS) {
-							unlink($file);
-
-							++$num_deleted;
-						}
-					}
-				}
-			}
-
-			Debug::log("$cache_dir: removed $num_deleted files.");
-		}
 	}
 
 	/**
@@ -1523,12 +1500,12 @@ class RSSUtils {
 	}
 
 	static function housekeeping_common() {
-		RSSUtils::expire_cached_files();
+		DiskCache::expire();
+
 		RSSUtils::expire_lock_files();
 		RSSUtils::expire_error_log();
-
-		$count = RSSUtils::update_feedbrowser_cache();
-		Debug::log("Feedbrowser updated, $count feeds processed.");
+		RSSUtils::expire_feed_archive();
+		RSSUtils::cleanup_feed_browser();
 
 		Article::purge_orphans();
 		RSSUtils::cleanup_counters_cache();
@@ -1542,7 +1519,7 @@ class RSSUtils {
 		$icon_file = ICONS_DIR . "/$feed.ico";
 
 		if (!file_exists($icon_file)) {
-			$favicon_url = get_favicon_url($site_url);
+			$favicon_url = RSSUtils::get_favicon_url($site_url);
 
 			if ($favicon_url) {
 				// Limiting to "image" type misses those served with text/plain
@@ -1592,7 +1569,159 @@ class RSSUtils {
 	}
 
 	static function is_gzipped($feed_data) {
-		return mb_strpos($feed_data, "\x1f" . "\x8b" . "\x08", 0, "US-ASCII") === 0;
+		return strpos(substr($feed_data, 0, 3),
+				"\x1f" . "\x8b" . "\x08", 0) === 0;
+	}
+
+	static function load_filters($feed_id, $owner_uid) {
+		$filters = array();
+
+		$feed_id = (int) $feed_id;
+		$cat_id = (int)Feeds::getFeedCategory($feed_id);
+
+		if ($cat_id == 0)
+			$null_cat_qpart = "cat_id IS NULL OR";
+		else
+			$null_cat_qpart = "";
+
+		$pdo = Db::pdo();
+
+		$sth = $pdo->prepare("SELECT * FROM ttrss_filters2 WHERE
+				owner_uid = ? AND enabled = true ORDER BY order_id, title");
+		$sth->execute([$owner_uid]);
+
+		$check_cats = array_merge(
+			Feeds::getParentCategories($cat_id, $owner_uid),
+			[$cat_id]);
+
+		$check_cats_str = join(",", $check_cats);
+		$check_cats_fullids = array_map(function($a) { return "CAT:$a"; }, $check_cats);
+
+		while ($line = $sth->fetch()) {
+			$filter_id = $line["id"];
+
+			$match_any_rule = sql_bool_to_bool($line["match_any_rule"]);
+
+			$sth2 = $pdo->prepare("SELECT
+					r.reg_exp, r.inverse, r.feed_id, r.cat_id, r.cat_filter, r.match_on, t.name AS type_name
+					FROM ttrss_filters2_rules AS r,
+					ttrss_filter_types AS t
+					WHERE
+						(match_on IS NOT NULL OR
+						  (($null_cat_qpart (cat_id IS NULL AND cat_filter = false) OR cat_id IN ($check_cats_str)) AND
+						  (feed_id IS NULL OR feed_id = ?))) AND
+						filter_type = t.id AND filter_id = ?");
+			$sth2->execute([$feed_id, $filter_id]);
+
+			$rules = array();
+			$actions = array();
+
+			while ($rule_line = $sth2->fetch()) {
+				#				print_r($rule_line);
+
+				if ($rule_line["match_on"]) {
+					$match_on = json_decode($rule_line["match_on"], true);
+
+					if (in_array("0", $match_on) || in_array($feed_id, $match_on) || count(array_intersect($check_cats_fullids, $match_on)) > 0) {
+
+						$rule = array();
+						$rule["reg_exp"] = $rule_line["reg_exp"];
+						$rule["type"] = $rule_line["type_name"];
+						$rule["inverse"] = sql_bool_to_bool($rule_line["inverse"]);
+
+						array_push($rules, $rule);
+					} else if (!$match_any_rule) {
+						// this filter contains a rule that doesn't match to this feed/category combination
+						// thus filter has to be rejected
+
+						$rules = [];
+						break;
+					}
+
+				} else {
+
+					$rule = array();
+					$rule["reg_exp"] = $rule_line["reg_exp"];
+					$rule["type"] = $rule_line["type_name"];
+					$rule["inverse"] = sql_bool_to_bool($rule_line["inverse"]);
+
+					array_push($rules, $rule);
+				}
+			}
+
+			if (count($rules) > 0) {
+				$sth2 = $pdo->prepare("SELECT a.action_param,t.name AS type_name
+						FROM ttrss_filters2_actions AS a,
+						ttrss_filter_actions AS t
+						WHERE
+							action_id = t.id AND filter_id = ?");
+				$sth2->execute([$filter_id]);
+
+				while ($action_line = $sth2->fetch()) {
+					#				print_r($action_line);
+
+					$action = array();
+					$action["type"] = $action_line["type_name"];
+					$action["param"] = $action_line["action_param"];
+
+					array_push($actions, $action);
+				}
+			}
+
+			$filter = [];
+			$filter["id"] = $filter_id;
+			$filter["match_any_rule"] = sql_bool_to_bool($line["match_any_rule"]);
+			$filter["inverse"] = sql_bool_to_bool($line["inverse"]);
+			$filter["rules"] = $rules;
+			$filter["actions"] = $actions;
+
+			if (count($rules) > 0 && count($actions) > 0) {
+				array_push($filters, $filter);
+			}
+		}
+
+		return $filters;
+	}
+
+	/**
+	 * Try to determine the favicon URL for a feed.
+	 * adapted from wordpress favicon plugin by Jeff Minard (http://thecodepro.com/)
+	 * http://dev.wp-plugins.org/file/favatars/trunk/favatars.php
+	 *
+	 * @param string $url A feed or page URL
+	 * @access public
+	 * @return mixed The favicon URL, or false if none was found.
+	 */
+	static function get_favicon_url($url) {
+
+		$favicon_url = false;
+
+		if ($html = @fetch_file_contents($url)) {
+
+			$doc = new DOMDocument();
+			if ($doc->loadHTML($html)) {
+				$xpath = new DOMXPath($doc);
+
+				$base = $xpath->query('/html/head/base[@href]');
+				foreach ($base as $b) {
+					$url = rewrite_relative_url($url, $b->getAttribute("href"));
+					break;
+				}
+
+				$entries = $xpath->query('/html/head/link[@rel="shortcut icon" or @rel="icon"]');
+				if (count($entries) > 0) {
+					foreach ($entries as $entry) {
+						$favicon_url = rewrite_relative_url($url, $entry->getAttribute("href"));
+						break;
+					}
+				}
+			}
+		}
+
+		if (!$favicon_url)
+			$favicon_url = rewrite_relative_url($url, "/favicon.ico");
+
+		return $favicon_url;
 	}
 
 }

@@ -54,7 +54,11 @@ require(["dojo/_base/kernel",
 	"fox/Headlines",
 	"fox/Article",
 	"fox/FeedStoreModel",
-	"fox/FeedTree"], function (dojo, declare, ready, parser, AppBase) {
+	"fox/FeedTree",
+	"fox/Toolbar",
+	"fox/form/Select",
+	"fox/form/ComboButton",
+	"fox/form/DropDownButton"], function (dojo, declare, ready, parser, AppBase) {
 
 	ready(function () {
 		try {
@@ -63,33 +67,35 @@ require(["dojo/_base/kernel",
 				_widescreen_mode: false,
 				hotkey_actions: {},
 				constructor: function () {
-					parser.parse();
+					this.setupNightModeDetection(() => {
+						parser.parse();
 
-					if (!this.checkBrowserFeatures())
-						return;
+						if (!this.checkBrowserFeatures())
+							return;
 
-					this.setLoadingProgress(30);
-					this.initHotkeyActions();
+						this.setLoadingProgress(30);
+						this.initHotkeyActions();
 
-					const a = document.createElement('audio');
-					const hasAudio = !!a.canPlayType;
-					const hasSandbox = "sandbox" in document.createElement("iframe");
-					const hasMp3 = !!(a.canPlayType && a.canPlayType('audio/mpeg;').replace(/no/, ''));
-					const clientTzOffset = new Date().getTimezoneOffset() * 60;
+						const a = document.createElement('audio');
+						const hasAudio = !!a.canPlayType;
+						const hasSandbox = "sandbox" in document.createElement("iframe");
+						const hasMp3 = !!(a.canPlayType && a.canPlayType('audio/mpeg;').replace(/no/, ''));
+						const clientTzOffset = new Date().getTimezoneOffset() * 60;
 
-					const params = {
-						op: "rpc", method: "sanityCheck", hasAudio: hasAudio,
-						hasMp3: hasMp3,
-						clientTzOffset: clientTzOffset,
-						hasSandbox: hasSandbox
-					};
+						const params = {
+							op: "rpc", method: "sanityCheck", hasAudio: hasAudio,
+							hasMp3: hasMp3,
+							clientTzOffset: clientTzOffset,
+							hasSandbox: hasSandbox
+						};
 
-					xhrPost("backend.php", params, (transport) => {
-						try {
-							App.backendSanityCallback(transport);
-						} catch (e) {
-							App.Error.report(e);
-						}
+						xhrPost("backend.php", params, (transport) => {
+							try {
+								App.backendSanityCallback(transport);
+							} catch (e) {
+								App.Error.report(e);
+							}
+						});
 					});
 				},
 				checkBrowserFeatures: function() {
@@ -144,13 +150,6 @@ require(["dojo/_base/kernel",
 					dijit.getEnclosingWidget(toolbar.order_by).attr('value',
 						App.getInitParam("default_view_order_by"));
 
-					const hash_feed_id = hash_get('f');
-					const hash_feed_is_cat = hash_get('c') == "1";
-
-					if (hash_feed_id != undefined) {
-						Feeds.setActive(hash_feed_id, hash_feed_is_cat);
-					}
-
 					App.setLoadingProgress(50);
 
 					this._widescreen_mode = App.getInitParam("widescreen");
@@ -203,8 +202,12 @@ require(["dojo/_base/kernel",
 				isCombinedMode: function() {
 					return App.getInitParam("combined_display_mode");
 				},
-				hotkeyHandler(event) {
+				hotkeyHandler: function(event) {
 					if (event.target.nodeName == "INPUT" || event.target.nodeName == "TEXTAREA") return;
+
+					// Arrow buttons and escape are not reported via keypress, handle them via keydown.
+					// escape = 27, left = 37, up = 38, right = 39, down = 40, pgup = 33, pgdn = 34
+					if (event.type == "keydown" && event.which != 27 && (event.which < 33 || event.which > 40)) return;
 
 					const action_name = App.keyeventToAction(event);
 
@@ -212,7 +215,7 @@ require(["dojo/_base/kernel",
 						const action_func = this.hotkey_actions[action_name];
 
 						if (action_func != null) {
-							action_func();
+							action_func(event);
 							event.stopPropagation();
 							return false;
 						}
@@ -276,23 +279,23 @@ require(["dojo/_base/kernel",
 
 						if (rv) Feeds.open({feed: rv[0], is_cat: rv[1], delayed: true})
 					};
-					this.hotkey_actions["next_article"] = function () {
-						Headlines.move('next');
+					this.hotkey_actions["next_article_or_scroll"] = function (event) {
+						Headlines.move('next', {event: event});
 					};
-					this.hotkey_actions["prev_article"] = function () {
-						Headlines.move('prev');
+					this.hotkey_actions["prev_article_or_scroll"] = function (event) {
+						Headlines.move('prev', {event: event});
 					};
-					this.hotkey_actions["next_article_noscroll"] = function () {
-						Headlines.move('next', true);
+					this.hotkey_actions["next_article_noscroll"] = function (event) {
+						Headlines.move('next', {noscroll: true, event: event});
 					};
-					this.hotkey_actions["prev_article_noscroll"] = function () {
-						Headlines.move('prev', true);
+					this.hotkey_actions["prev_article_noscroll"] = function (event) {
+						Headlines.move('prev', {noscroll: true, event: event});
 					};
-					this.hotkey_actions["next_article_noexpand"] = function () {
-						Headlines.move('next', true, true);
+					this.hotkey_actions["next_article_noexpand"] = function (event) {
+						Headlines.move('next', {noscroll: true, noexpand: true, event: event});
 					};
-					this.hotkey_actions["prev_article_noexpand"] = function () {
-						Headlines.move('prev', true, true);
+					this.hotkey_actions["prev_article_noexpand"] = function (event) {
+						Headlines.move('prev', {noscroll: true, noexpand: true, event: event});
 					};
 					this.hotkey_actions["search_dialog"] = function () {
 						Feeds.search();
@@ -323,11 +326,29 @@ require(["dojo/_base/kernel",
 					this.hotkey_actions["catchup_above"] = function () {
 						Headlines.catchupRelativeTo(0);
 					};
-					this.hotkey_actions["article_scroll_down"] = function () {
-						Article.scroll(40);
+					this.hotkey_actions["article_scroll_down"] = function (event) {
+						const ctr = App.isCombinedMode() ? $("headlines-frame") : $("content-insert");
+
+						if (ctr)
+							Article.scroll(ctr.offsetHeight / 2, event);
 					};
-					this.hotkey_actions["article_scroll_up"] = function () {
-						Article.scroll(-40);
+					this.hotkey_actions["article_scroll_up"] = function (event) {
+						const ctr = App.isCombinedMode() ? $("headlines-frame") : $("content-insert");
+
+						if (ctr)
+							Article.scroll(-ctr.offsetHeight / 2, event);
+					};
+					this.hotkey_actions["next_article_page"] = function (event) {
+						Headlines.scrollByPages(1, event);
+					};
+					this.hotkey_actions["prev_article_page"] = function (event) {
+						Headlines.scrollByPages(-1, event);
+					};
+					this.hotkey_actions["article_page_down"] = function (event) {
+						Article.scrollByPages(1, event);
+					};
+					this.hotkey_actions["article_page_up"] = function (event) {
+						Article.scrollByPages(-1, event);
 					};
 					this.hotkey_actions["close_article"] = function () {
 						if (App.isCombinedMode()) {
@@ -362,7 +383,7 @@ require(["dojo/_base/kernel",
 						Headlines.select('none');
 					};
 					this.hotkey_actions["feed_refresh"] = function () {
-						if (Feeds.getActive() != undefined) {
+						if (typeof Feeds.getActive() != "undefined") {
 							Feeds.open({feed: Feeds.getActive(), is_cat: Feeds.activeIsCat()});
 						}
 					};
@@ -392,7 +413,7 @@ require(["dojo/_base/kernel",
 							CommonDialogs.editFeed(Feeds.getActive());
 					};
 					this.hotkey_actions["feed_catchup"] = function () {
-						if (Feeds.getActive() != undefined) {
+						if (typeof Feeds.getActive() != "undefined") {
 							Feeds.catchupCurrent();
 						}
 					};
@@ -411,6 +432,9 @@ require(["dojo/_base/kernel",
 						if (Feeds.activeIsCat()) {
 							dijit.byId("feedTree").collapseCat(Feeds.getActive());
 						}
+					};
+					this.hotkey_actions["goto_read"] = function () {
+						Feeds.open({feed: -6});
 					};
 					this.hotkey_actions["goto_all"] = function () {
 						Feeds.open({feed: -4});
@@ -491,9 +515,6 @@ require(["dojo/_base/kernel",
 							Headlines.renderAgain();
 						});
 					};
-					this.hotkey_actions["toggle_night_mode"] = function () {
-						App.toggleNightMode();
-					};
 				},
 				onActionSelected: function(opid) {
 					switch (opid) {
@@ -559,9 +580,6 @@ require(["dojo/_base/kernel",
 								alert(__("Widescreen is not available in combined mode."));
 							}
 							break;
-						case "qmcToggleNightMode":
-							App.toggleNightMode();
-							break;
 						case "qmcHKhelp":
 							App.helpDialog("main");
 							break;
@@ -576,7 +594,10 @@ require(["dojo/_base/kernel",
 
 			App = new _App();
 		} catch (e) {
-			App.Error.report(e);
+			if (App && App.Error)
+				App.Error.report(e);
+			else
+				alert(e + "\n\n" + e.stack);
 		}
 	});
 });

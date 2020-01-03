@@ -7,13 +7,18 @@ class Backend extends Handler {
 	}
 
 	function digestTest() {
-		header("Content-type: text/html");
+		if (isset($_SESSION['uid'])) {
+			header("Content-type: text/html");
 
-		$rv = Digest::prepare_headlines_digest($_SESSION['uid'], 1, 1000);
+			$rv = Digest::prepare_headlines_digest($_SESSION['uid'], 1, 1000);
 
-		$rv[3] = "<pre>" . $rv[3] . "</pre>";
-
-		print_r($rv);
+			print "<h1>HTML</h1>";
+			print $rv[0];
+			print "<h1>Plain text</h1>";
+			print "<pre>".$rv[3]."</pre>";
+		} else {
+			print error_json(6);
+		}
 	}
 
 	private function display_main_help() {
@@ -83,7 +88,7 @@ class Backend extends Handler {
 	}
 
 	function help() {
-		$topic = basename(clean($_REQUEST["topic"])); // only one for now
+		$topic = clean_filename($_REQUEST["topic"]); // only one for now
 
 		if ($topic == "main") {
 			$info = get_hotkeys_info();
@@ -149,13 +154,10 @@ class Backend extends Handler {
 			print "</ul>";
 		}
 
-		print "<div class='dlgButtons'>";
-		print "<button dojoType='dijit.form.Button' style='float : left' class='alt-info' onclick='window.open(\"https://tt-rss.org/wiki/InterfaceTips\")'>
-			<i class='material-icons'>help</i> ".__("More info...")."</button>";
-
+		print "<footer class='text-center'>";
 		print "<button dojoType='dijit.form.Button'
 			onclick=\"return dijit.byId('helpDlg').hide()\">".__('Close this window')."</button>";
-		print "</div>";
+		print "</footer>";
 
 	}
 }

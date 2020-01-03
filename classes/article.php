@@ -100,15 +100,12 @@ class Article extends Handler_Protected {
 			$pluginhost->load_all(PluginHost::KIND_ALL, $owner_uid);
 			$pluginhost->load_data();
 
-			$af_readability = $pluginhost->get_plugin("Af_Readability");
+			foreach ($pluginhost->get_hooks(PluginHost::HOOK_GET_FULL_TEXT) as $p) {
+				$extracted_content = $p->hook_get_full_text($url);
 
-			if ($af_readability) {
-				$enable_share_anything = $pluginhost->get($af_readability, "enable_share_anything");
-
-				if ($enable_share_anything) {
-					$extracted_content = $af_readability->extract_content($url);
-
-					if ($extracted_content) $content = $extracted_content;
+				if ($extracted_content) {
+					$content = $extracted_content;
+					break;
 				}
 			}
 		}
@@ -151,6 +148,16 @@ class Article extends Handler_Protected {
 					content = ?, content_hash = ? WHERE id = ?");
 				$sth->execute([$content, $content_hash, $ref_id]);
 
+				if (DB_TYPE == "pgsql"){
+					$sth = $pdo->prepare("UPDATE ttrss_entries
+					SET tsvector_combined = to_tsvector( :ts_content)
+					WHERE id = :id");
+					$params = [
+						":ts_content" => mb_substr(strip_tags($content ), 0, 900000),
+						":id" => $ref_id];
+					$sth->execute($params);
+				}
+				
 				$sth = $pdo->prepare("UPDATE ttrss_user_entries SET published = true,
 						last_published = NOW() WHERE
 						int_id = ? AND owner_uid = ?");
@@ -186,7 +193,15 @@ class Article extends Handler_Protected {
 
 			if ($row = $sth->fetch()) {
 				$ref_id = $row["id"];
-
+				if (DB_TYPE == "pgsql"){
+					$sth = $pdo->prepare("UPDATE ttrss_entries
+					SET tsvector_combined = to_tsvector( :ts_content)
+					WHERE id = :id");
+					$params = [
+						":ts_content" => mb_substr(strip_tags($content ), 0, 900000),
+						":id" => $ref_id];
+					$sth->execute($params);
+				}
 				$sth = $pdo->prepare("INSERT INTO ttrss_user_entries
 					(ref_id, uuid, feed_id, orig_feed_id, owner_uid, published, tag_cache, label_cache,
 						last_read, note, unread, last_published)
@@ -211,8 +226,6 @@ class Article extends Handler_Protected {
 
 	function editArticleTags() {
 
-		print __("Tags for this article (separated by commas):")."<br>";
-
 		$param = clean($_REQUEST['param']);
 
 		$tags = Article::get_article_tags($param);
@@ -223,23 +236,22 @@ class Article extends Handler_Protected {
 		print_hidden("op", "article");
 		print_hidden("method", "setArticleTags");
 
-		print "<table width='100%'><tr><td>";
+		print "<header class='horizontal'>" . __("Tags for this article (separated by commas):")."</header>";
 
-		print "<textarea dojoType=\"dijit.form.SimpleTextarea\" rows='4'
-			style='height : 100px; font-size : 12px; width : 98%' id=\"tags_str\"
+		print "<section>";
+		print "<textarea dojoType='dijit.form.SimpleTextarea' rows='4'
+			style='height : 100px; font-size : 12px; width : 98%' id='tags_str'
 			name='tags_str'>$tags_str</textarea>
-		<div class=\"autocomplete\" id=\"tags_choices\"
-				style=\"display:none\"></div>";
+		<div class='autocomplete' id='tags_choices'
+				style='display:none'></div>";
+		print "</section>";
 
-		print "</td></tr></table>";
-
-		print "<div class='dlgButtons'>";
-
-		print "<button dojoType=\"dijit.form.Button\"
-			onclick=\"dijit.byId('editTagsDlg').execute()\">".__('Save')."</button> ";
-		print "<button dojoType=\"dijit.form.Button\"
+		print "<footer>";
+		print "<button dojoType='dijit.form.Button'
+			type='submit' class='alt-primary' onclick=\"dijit.byId('editTagsDlg').execute()\">".__('Save')."</button> ";
+		print "<button dojoType='dijit.form.Button'
 			onclick=\"dijit.byId('editTagsDlg').hide()\">".__('Cancel')."</button>";
-		print "</div>";
+		print "</footer>";
 
 	}
 
@@ -293,19 +305,9 @@ class Article extends Handler_Protected {
 				post_int_id = ? AND owner_uid = ?");
 			$sth->execute([$int_id, $_SESSION['uid']]);
 
+			$tags = FeedItem_Common::normalize_categories($tags);
+
 			foreach ($tags as $tag) {
-				$tag = sanitize_tag($tag);
-
-				if (!tag_is_valid($tag)) {
-					continue;
-				}
-
-				if (preg_match("/^[0-9]*$/", $tag)) {
-					continue;
-				}
-
-				//					print "<!-- $id : $int_id : $tag -->";
-
 				if ($tag != '') {
 					$sth = $this->pdo->prepare("INSERT INTO ttrss_tags
 								(post_int_id, owner_uid, tag_name)
@@ -319,7 +321,6 @@ class Article extends Handler_Protected {
 
 			/* update tag cache */
 
-			sort($tags_to_cache);
 			$tags_str = join(",", $tags_to_cache);
 
 			$sth = $this->pdo->prepare("UPDATE ttrss_user_entries
@@ -434,7 +435,7 @@ class Article extends Handler_Protected {
 			foreach ($result as $line) {
 
 				foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_ENCLOSURE_ENTRY) as $plugin) {
-					$line = $plugin->hook_enclosure_entry($line);
+					$line = $plugin->hook_enclosure_entry($line, $id);
 				}
 
 				$url = $line["content_url"];
@@ -519,7 +520,7 @@ class Article extends Handler_Protected {
 				$rv .= "<br clear='both'/>";
 			}
 
-			$rv .= "<div class=\"attachments\" dojoType=\"dijit.form.DropDownButton\">".
+			$rv .= "<div class=\"attachments\" dojoType=\"fox.form.DropDownButton\">".
 				"<span>" . __('Attachments')."</span>";
 
 			$rv .= "<div dojoType=\"dijit.Menu\" style=\"display: none;\">";
@@ -661,10 +662,12 @@ class Article extends Handler_Protected {
 
 		$rv = array();
 
+		$cache = new DiskCache("images");
+
 		while ($line = $sth->fetch()) {
 
-			if (file_exists(CACHE_DIR . '/images/' . sha1($line["content_url"]))) {
-				$line["content_url"] = get_self_url_prefix() . '/public.php?op=cached_url&hash=' . sha1($line["content_url"]);
+			if ($cache->exists(sha1($line["content_url"]))) {
+				$line["content_url"] = $cache->getUrl(sha1($line["content_url"]));
 			}
 
 			array_push($rv, $line);
@@ -700,17 +703,17 @@ class Article extends Handler_Protected {
 
 		$ids_qmarks = arr_qmarks($ids);
 
-		if ($cmode == 0) {
+		if ($cmode == 1) {
 			$sth = $pdo->prepare("UPDATE ttrss_user_entries SET
-			unread = false,last_read = NOW()
-				WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
-		} else if ($cmode == 1) {
-			$sth = $pdo->prepare("UPDATE ttrss_user_entries SET
-			unread = true
-				WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
-		} else {
+				unread = true
+					WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
+		} else if ($cmode == 2) {
 			$sth = $pdo->prepare("UPDATE ttrss_user_entries SET
 				unread = NOT unread,last_read = NOW()
+					WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
+		} else {
+			$sth = $pdo->prepare("UPDATE ttrss_user_entries SET
+				unread = false,last_read = NOW()
 					WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
 		}
 
@@ -786,6 +789,75 @@ class Article extends Handler_Protected {
 			Labels::update_cache($owner_uid, $id, array("no-labels" => 1));
 
 		return $rv;
+	}
+
+	static function get_article_image($enclosures, $content, $site_url) {
+
+		$article_image = "";
+		$article_stream = "";
+
+		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_ARTICLE_IMAGE) as $p) {
+			list ($article_image, $article_stream, $content) = $p->hook_article_image($enclosures, $content, $site_url);
+		}
+
+		if (!$article_image && !$article_stream) {
+			$tmpdoc = new DOMDocument();
+
+			if (@$tmpdoc->loadHTML('<?xml encoding="UTF-8">' . mb_substr($content, 0, 131070))) {
+				$tmpxpath = new DOMXPath($tmpdoc);
+				$elems = $tmpxpath->query('(//img[@src]|//video[@poster]|//iframe[contains(@src , "youtube.com/embed/")])');
+
+				foreach ($elems as $e) {
+					if ($e->nodeName == "iframe") {
+						$matches = [];
+						if ($rrr = preg_match("/\/embed\/([\w-]+)/", $e->getAttribute("src"), $matches)) {
+							$article_image = "https://img.youtube.com/vi/" . $matches[1] . "/hqdefault.jpg";
+							$article_stream = "https://youtu.be/" . $matches[1];
+							break;
+						}
+					} else if ($e->nodeName == "video") {
+						$article_image = $e->getAttribute("poster");
+
+						$src = $tmpxpath->query("//source[@src]", $e)->item(0);
+
+						if ($src) {
+							$article_stream = $src->getAttribute("src");
+						}
+
+						break;
+					} else if ($e->nodeName == 'img') {
+						if (mb_strpos($e->getAttribute("src"), "data:") !== 0) {
+							$article_image = $e->getAttribute("src");
+						}
+						break;
+					}
+				}
+			}
+
+			if (!$article_image)
+				foreach ($enclosures as $enc) {
+					if (strpos($enc["content_type"], "image/") !== FALSE) {
+						$article_image = $enc["content_url"];
+						break;
+					}
+				}
+
+			if ($article_image)
+				$article_image = rewrite_relative_url($site_url, $article_image);
+
+			if ($article_stream)
+				$article_stream = rewrite_relative_url($site_url, $article_stream);
+		}
+
+		$cache = new DiskCache("images");
+
+		if ($article_image && $cache->exists(sha1($article_image)))
+			$article_image = $cache->getUrl(sha1($article_image));
+
+		if ($article_stream && $cache->exists(sha1($article_stream)))
+			$article_stream = $cache->getUrl(sha1($article_stream));
+
+		return [$article_image, $article_stream];
 	}
 
 }

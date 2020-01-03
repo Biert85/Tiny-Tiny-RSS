@@ -3,7 +3,7 @@
 define(["dojo/_base/declare"], function (declare) {
 	Feeds = {
 		counters_last_request: 0,
-		_active_feed_id: 0,
+		_active_feed_id: undefined,
 		_active_feed_is_cat: false,
 		infscroll_in_progress: 0,
 		infscroll_disabled: 0,
@@ -44,6 +44,8 @@ define(["dojo/_base/declare"], function (declare) {
 			this._counters_prev = [];
 		},
 		parseCounters: function (elems) {
+			PluginHost.run(PluginHost.HOOK_COUNTERS_RECEIVED, elems);
+
 			for (let l = 0; l < elems.length; l++) {
 
 				if (Feeds._counters_prev[l] && this.counterEquals(elems[l], this._counters_prev[l])) {
@@ -91,13 +93,17 @@ define(["dojo/_base/declare"], function (declare) {
 				}
 			}
 
-			this.hideOrShowFeeds(App.getInitParam("hide_read_feeds") == 1);
+			Headlines.updateCurrentUnread();
+
+			this.hideOrShowFeeds(App.getInitParam("hide_read_feeds"));
 			this._counters_prev = elems;
+
+			PluginHost.run(PluginHost.HOOK_COUNTERS_PROCESSED);
 		},
 		reloadCurrent: function(method) {
-			console.log("reloadCurrent: " + method);
-
 			if (this.getActive() != undefined) {
+				console.log("reloadCurrent: " + method);
+
 				this.open({feed: this.getActive(), is_cat: this.activeIsCat(), method: method});
 			}
 			return false; // block unneeded form submits
@@ -115,6 +121,8 @@ define(["dojo/_base/declare"], function (declare) {
 			Element.visible("feeds-holder") ? splitter.show() : splitter.hide();
 
 			dijit.byId("main").resize();
+
+			Headlines.updateCurrentUnread();
 		},
 		cancelSearch: function() {
 			this._search_query = "";
@@ -143,7 +151,7 @@ define(["dojo/_base/declare"], function (declare) {
 				const treeModel = new fox.FeedStoreModel({
 					store: store,
 					query: {
-						"type": App.getInitParam('enable_feed_cats') == 1 ? "category" : "feed"
+						"type": App.getInitParam('enable_feed_cats') ? "category" : "feed"
 					},
 					rootId: "root",
 					rootLabel: "Feeds",
@@ -196,15 +204,19 @@ define(["dojo/_base/declare"], function (declare) {
 			App.setLoadingProgress(50);
 
 			document.onkeydown = (event) => { return App.hotkeyHandler(event) };
+			document.onkeypress = (event) => { return App.hotkeyHandler(event) };
 			window.onresize = () => { Headlines.scrollHandler(); }
 
-			if (!this.getActive()) {
-				this.open({feed: -3});
+			const hash_feed_id = hash_get('f');
+			const hash_feed_is_cat = hash_get('c') == "1";
+
+			if (hash_feed_id != undefined) {
+				this.open({feed: hash_feed_id, is_cat: hash_feed_is_cat});
 			} else {
-				this.open({feed: this.getActive(), is_cat: this.activeIsCat()});
+				this.open({feed: -3});
 			}
 
-			this.hideOrShowFeeds(App.getInitParam("hide_read_feeds") == 1);
+			this.hideOrShowFeeds(App.getInitParam("hide_read_feeds"));
 
 			if (App.getInitParam("is_default_pw")) {
 				console.warn("user password is at default value");
@@ -229,7 +241,7 @@ define(["dojo/_base/declare"], function (declare) {
 			}
 
 			// bw_limit disables timeout() so we request initial counters separately
-			if (App.getInitParam("bw_limit") == "1") {
+			if (App.getInitParam("bw_limit")) {
 				this.requestCounters(true);
 			} else {
 				setTimeout(() => {
@@ -245,6 +257,8 @@ define(["dojo/_base/declare"], function (declare) {
 			return this._active_feed_id;
 		},
 		setActive: function(id, is_cat) {
+			console.log('setActive', id, is_cat);
+
 			hash_set('f', id);
 			hash_set('c', is_cat ? 1 : 0);
 
@@ -264,7 +278,7 @@ define(["dojo/_base/declare"], function (declare) {
 			if (tree) return tree.selectFeed(feed, is_cat);
 		},
 		toggleUnread: function() {
-			const hide = !(App.getInitParam("hide_read_feeds") == "1");
+			const hide = !App.getInitParam("hide_read_feeds");
 
 			xhrPost("backend.php", {op: "rpc", method: "setpref", key: "HIDE_READ_FEEDS", value: hide}, () => {
 				this.hideOrShowFeeds(hide);
@@ -375,7 +389,7 @@ define(["dojo/_base/declare"], function (declare) {
 			}
 		},
 		catchupFeed: function(feed, is_cat, mode) {
-			if (is_cat == undefined) is_cat = false;
+			is_cat = is_cat || false;
 
 			let str = false;
 
@@ -399,7 +413,7 @@ define(["dojo/_base/declare"], function (declare) {
 			str = str.replace("%s", fn)
 				.replace("%w", mark_what);
 
-			if (App.getInitParam("confirm_feed_catchup") == 1 && !confirm(str)) {
+			if (App.getInitParam("confirm_feed_catchup") && !confirm(str)) {
 				return;
 			}
 
@@ -414,7 +428,7 @@ define(["dojo/_base/declare"], function (declare) {
 			xhrPost("backend.php", catchup_query, (transport) => {
 				App.handleRpcJson(transport);
 
-				const show_next_feed = App.getInitParam("on_catchup_show_next_feed") == "1";
+				const show_next_feed = App.getInitParam("on_catchup_show_next_feed");
 
 				if (show_next_feed) {
 					const nuf = this.getNextUnread(feed, is_cat);
@@ -542,11 +556,31 @@ define(["dojo/_base/declare"], function (declare) {
 				execute: function () {
 					if (this.validate()) {
 						Feeds._search_query = this.attr('value');
+
+						// disallow empty queries
+						if (!Feeds._search_query.query)
+							Feeds._search_query = false;
+
 						this.hide();
 						Feeds.reloadCurrent();
 					}
 				},
 				href: query
+			});
+
+			const tmph = dojo.connect(dialog, 'onLoad', function () {
+				dojo.disconnect(tmph);
+
+				if (Feeds._search_query) {
+					if (Feeds._search_query.query)
+						dijit.byId('search_query')
+							.attr('value', Feeds._search_query.query);
+
+					if (Feeds._search_query.search_language)
+						dijit.byId('search_language')
+							.attr('value', Feeds._search_query.search_language);
+				}
+
 			});
 
 			dialog.show();

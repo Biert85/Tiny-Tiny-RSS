@@ -14,6 +14,7 @@ class Af_Comics extends Plugin {
 		$this->host = $host;
 
 		$host->add_hook($host::HOOK_FETCH_FEED, $this);
+		$host->add_hook($host::HOOK_FEED_BASIC_INFO, $this);
 		$host->add_hook($host::HOOK_SUBSCRIBE_FEED, $this);
 		$host->add_hook($host::HOOK_ARTICLE_FILTER, $this);
 		$host->add_hook($host::HOOK_PREFS_TAB, $this);
@@ -109,12 +110,9 @@ class Af_Comics extends Plugin {
 			$tpl->readTemplateFromFile('templates/generated_feed.txt');
 
 			$tpl->setVariable('FEED_TITLE', $feed_title, true);
-			$tpl->setVariable('VERSION', VERSION, true);
+			$tpl->setVariable('VERSION', get_version(), true);
 			$tpl->setVariable('FEED_URL', htmlspecialchars($fetch_url), true);
 			$tpl->setVariable('SELF_URL', $site_url, true);
-
-			$tpl->setVariable('ARTICLE_UPDATED_ATOM', date('c'), true);
-			$tpl->setVariable('ARTICLE_UPDATED_RFC822', date(DATE_RFC822), true);
 
 			if ($body) {
 				$doc = new DOMDocument();
@@ -125,13 +123,22 @@ class Af_Comics extends Plugin {
 					$node = $xpath->query('//picture[contains(@class, "item-comic-image")]/img')->item(0);
 
 					if ($node) {
-						$node->removeAttribute("width");
-						$node->removeAttribute("data-srcset");
-						$node->removeAttribute("srcset");
+						$title = $xpath->query('//h1')->item(0);
+
+						if ($title) {
+							$title = clean(trim($title->nodeValue));
+						} else {
+							$title = date('l, F d, Y');
+						}
+
+						foreach (['srcset', 'sizes', 'data-srcset', 'width'] as $attr ) {
+							$node->removeAttribute($attr);
+						}
 
 						$tpl->setVariable('ARTICLE_ID', $article_link, true);
 						$tpl->setVariable('ARTICLE_LINK', $article_link, true);
-						$tpl->setVariable('ARTICLE_TITLE', date('l, F d, Y'), true);
+						$tpl->setVariable('ARTICLE_UPDATED_ATOM', date('c', mktime(11, 0, 0)), true);
+						$tpl->setVariable('ARTICLE_TITLE', htmlspecialchars($title), true);
 						$tpl->setVariable('ARTICLE_EXCERPT', '', true);
 						$tpl->setVariable('ARTICLE_CONTENT', $doc->saveHTML($node), true);
 
@@ -140,14 +147,11 @@ class Af_Comics extends Plugin {
 						$tpl->setVariable('ARTICLE_SOURCE_TITLE', $feed_title, true);
 
 						$tpl->addBlock('entry');
-
 					}
 				}
 			}
 
 			$tpl->addBlock('feed');
-
-			$tmp_data = '';
 
 			if ($tpl->generateOutputToString($tmp_data))
 				$feed_data = $tmp_data;
@@ -164,6 +168,16 @@ class Af_Comics extends Plugin {
 			return '<?xml version="1.0" encoding="utf-8"?>'; // Get is_html() to return false.
 
 		return $contents;
+	}
+
+	function hook_feed_basic_info($basic_info, $fetch_url, $owner_uid, $feed, $auth_login, $auth_pass) {
+		if ($auth_login || $auth_pass)
+			return $basic_info;
+
+		if (preg_match('#^https?://www\.gocomics\.com/([-a-z0-9]+)$#i', $fetch_url, $matches))
+			$basic_info = array('title' => ucfirst($matches[1]), 'site_url' => $matches[0]);
+
+		return $basic_info;
 	}
 
 	function api_version() {

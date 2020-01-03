@@ -53,31 +53,38 @@ require(["dojo/_base/kernel",
 	"fox/PrefFilterStore",
 	"fox/PrefFeedTree",
 	"fox/PrefFilterTree",
-	"fox/PrefLabelTree"], function (dojo, declare, ready, parser, AppBase) {
+	"fox/PrefLabelTree",
+	"fox/Toolbar",
+	"fox/form/Select",
+	"fox/form/ComboButton",
+	"fox/form/DropDownButton"], function (dojo, declare, ready, parser, AppBase) {
 
 	ready(function () {
 		try {
 			const _App = declare("fox.App", AppBase, {
 				constructor: function() {
-					parser.parse();
+					this.setupNightModeDetection(() => {
+						parser.parse();
 
-					this.setLoadingProgress(50);
+						this.setLoadingProgress(50);
 
-					const clientTzOffset = new Date().getTimezoneOffset() * 60;
-					const params = {op: "rpc", method: "sanityCheck", clientTzOffset: clientTzOffset};
+						const clientTzOffset = new Date().getTimezoneOffset() * 60;
+						const params = {op: "rpc", method: "sanityCheck", clientTzOffset: clientTzOffset};
 
-					xhrPost("backend.php", params, (transport) => {
-						try {
-							this.backendSanityCallback(transport);
-						} catch (e) {
-							this.Error.report(e);
-						}
+						xhrPost("backend.php", params, (transport) => {
+							try {
+								this.backendSanityCallback(transport);
+							} catch (e) {
+								this.Error.report(e);
+							}
+						});
 					});
 				},
 				initSecondStage: function() {
 					this.enableCsrfSupport();
 
 					document.onkeydown = (event) => { return App.hotkeyHandler(event) };
+					document.onkeypress = (event) => { return App.hotkeyHandler(event) };
 					App.setLoadingProgress(50);
 					Notify.close();
 
@@ -117,6 +124,10 @@ require(["dojo/_base/kernel",
 				hotkeyHandler: function (event) {
 					if (event.target.nodeName == "INPUT" || event.target.nodeName == "TEXTAREA") return;
 
+					// Arrow buttons and escape are not reported via keypress, handle them via keydown.
+					// escape = 27, left = 37, up = 38, right = 39, down = 40
+					if (event.type == "keydown" && event.which != 27 && (event.which < 37 || event.which > 40)) return;
+
 					const action_name = App.keyeventToAction(event);
 
 					if (action_name) {
@@ -133,8 +144,6 @@ require(["dojo/_base/kernel",
 							case "help_dialog":
 								App.helpDialog("main");
 								return false;
-							case "toggle_night_mode":
-								App.toggleNightMode();
 							default:
 								console.log("unhandled action: " + action_name + "; keycode: " + event.which);
 						}
@@ -148,7 +157,10 @@ require(["dojo/_base/kernel",
 			App = new _App();
 
 		} catch (e) {
-			this.Error.report(e);
+			if (App && App.Error)
+				App.Error.report(e);
+			else
+				alert(e + "\n\n" + e.stack);
 		}
 	});
 });

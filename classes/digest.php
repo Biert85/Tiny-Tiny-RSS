@@ -103,9 +103,11 @@ class Digest
 
 		$tpl->setVariable('CUR_DATE', date('Y/m/d', $local_ts));
 		$tpl->setVariable('CUR_TIME', date('G:i', $local_ts));
+		$tpl->setVariable('TTRSS_HOST', SELF_URL_PATH);
 
 		$tpl_t->setVariable('CUR_DATE', date('Y/m/d', $local_ts));
 		$tpl_t->setVariable('CUR_TIME', date('G:i', $local_ts));
+		$tpl_t->setVariable('TTRSS_HOST', SELF_URL_PATH);
 
 		$affected_ids = array();
 
@@ -166,6 +168,15 @@ class Digest
 				$line['feed_title'] = $line['cat_title'] . " / " . $line['feed_title'];
 			}
 
+			$article_labels = Article::get_article_labels($line["ref_id"], $user_id);
+			$article_labels_formatted = "";
+
+			if (is_array($article_labels) && count($article_labels) > 0) {
+				$article_labels_formatted = implode(", ", array_map(function($a) {
+					return $a[1];
+				}, $article_labels));
+			}
+
 			$tpl->setVariable('FEED_TITLE', $line["feed_title"]);
 			$tpl->setVariable('ARTICLE_TITLE', $line["title"]);
 			$tpl->setVariable('ARTICLE_LINK', $line["link"]);
@@ -174,6 +185,7 @@ class Digest
 				truncate_string(strip_tags($line["content"]), 300));
 //			$tpl->setVariable('ARTICLE_CONTENT',
 //				strip_tags($article_content));
+			$tpl->setVariable('ARTICLE_LABELS', $article_labels_formatted, true);
 
 			$tpl->addBlock('article');
 
@@ -181,8 +193,9 @@ class Digest
 			$tpl_t->setVariable('ARTICLE_TITLE', $line["title"]);
 			$tpl_t->setVariable('ARTICLE_LINK', $line["link"]);
 			$tpl_t->setVariable('ARTICLE_UPDATED', $updated);
-//			$tpl_t->setVariable('ARTICLE_EXCERPT',
-//				truncate_string(strip_tags($line["excerpt"]), 100));
+			$tpl_t->setVariable('ARTICLE_LABELS', $article_labels_formatted, true);
+			$tpl_t->setVariable('ARTICLE_EXCERPT',
+				truncate_string(strip_tags($line["content"]), 300, "..."), true);
 
 			$tpl_t->addBlock('article');
 

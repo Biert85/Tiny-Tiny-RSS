@@ -80,43 +80,51 @@ body.ttrss_prefs {
 		width : 575px;
 	}
 
-	fieldset.prefs-set {
+	fieldset.prefs {
+		min-height : 30px;
+
+		label:first-of-type {
+			min-width : 300px;
+		}
+
 		.help-text {
 			display : inline-block;
 			margin-left : 10px;
 		}
 	}
 
-	table.prefPluginsList td label, table.prefUserList td {
-		cursor : pointer;
-	}
+	fieldset.plugin {
+		label.description {
+			width : 600px;
+			margin-right : 150px;
+			display : inline-block;
 
-	table.prefPluginsList{
-		label {
-			white-space : nowrap;
-		}
-
-		i.plugin-enabled {
-			color : @color-checked;
+			.dijitCheckBox {
+				margin-right : 10px;
+			}
 		}
 	}
 
-	table.prefPluginsList label img {
-		vertical-align : middle;
-	}
+	.prefErrorLog {
+		tr {
+			td {
+				font-size: 10px;
+			}
 
-	table.prefErrorLog tr.errrow td {
-		font-size : 10px;
-	}
+			.errno {
+				font-style : italic;
+				font-weight : bold;
+				white-space : nowrap;
+			}
 
-	table.prefErrorLog tr.errrow td.errno {
-		font-style : italic;
-		font-weight : bold;
-		white-space : nowrap;
-	}
+			.errstr {
+				word-break: break-all;
+			}
 
-	table.prefErrorLog td.filename, table.prefErrorLog td.login, table.prefErrorLog td.timestamp {
-		color : @default-text;
+			.filename, .login, .timestamp {
+				color : @default-text;
+			}
+		}
 	}
 
 	hr {
@@ -139,6 +147,19 @@ body.ttrss_prefs {
 
 		td.v {
 			font-family : monospace;
+			word-break : break-all;
+		}
+	}
+}
+
+body.ttrss_prefs,
+body.ttrss_main {
+	#filterNewRuleDlg {
+		.invalid {
+			background : #ffc0c0;
+		}
+		.valid {
+			background : #c0ffc0;
 		}
 	}
 }

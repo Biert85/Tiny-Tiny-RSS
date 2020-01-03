@@ -1,4 +1,5 @@
 <?php startup_gettext(); ?>
+<!DOCTYPE html>
 <html>
 <head>
 	<title>Tiny Tiny RSS : Login</title>
@@ -64,7 +65,7 @@ function bwLimitChange(elem) {
 }
 </script>
 
-<?php $return = urlencode($_SERVER["REQUEST_URI"]) ?>
+<?php $return = urlencode(make_self_url()) ?>
 
 <div class="container">
 
@@ -94,11 +95,12 @@ function bwLimitChange(elem) {
 					   dojoType="dijit.form.TextBox"
 					   class="input input-text"
 					   value="<?php echo $_SESSION["fake_password"] ?>"/>
-
-				<?php if (strpos(PLUGINS, "auth_internal") !== FALSE) { ?>
-					<a href="public.php?op=forgotpass"><?php echo __("I forgot my password") ?></a>
-				<?php } ?>
 			</fieldset>
+			<?php if (strpos(PLUGINS, "auth_internal") !== FALSE) { ?>
+				<fieldset class="align-right">
+					<a href="public.php?op=forgotpass"><?php echo __("I forgot my password") ?></a>
+				</fieldset>
+			<?php } ?>
 
 			<fieldset>
 				<label><?php echo __("Profile:") ?></label>

@@ -16,7 +16,6 @@
 	require_once "sessions.php";
 	require_once "functions.php";
 	require_once "sanity_check.php";
-	require_once "version.php";
 	require_once "config.php";
 	require_once "db-prefs.php";
 
@@ -26,23 +25,16 @@
 
 	header('Content-Type: text/html; charset=utf-8');
 ?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
-	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!DOCTYPE html>
 <html>
 <head>
 	<title>Tiny Tiny RSS : <?php echo __("Preferences") ?></title>
     <meta name="viewport" content="initial-scale=1,width=device-width" />
 
-	<script type="text/javascript">
-		var __ttrss_version = "<?php echo VERSION ?>"
-	</script>
-
 	<?php if ($_SESSION["uid"]) {
 		$theme = get_pref("USER_CSS_THEME", false, false);
 		if ($theme && theme_exists("$theme")) {
 			echo stylesheet_tag(get_theme_path($theme), 'theme_css');
-		} else {
-			echo stylesheet_tag("css/default.css", 'theme_css');
 		}
 	}
 	?>
@@ -100,10 +92,22 @@
 	?>
 	</script>
 
+	<style type="text/css">
+		@media (prefers-color-scheme: dark) {
+			body {
+				background : #303030;
+			}
+		}
+
+		body.css_loading * {
+			display : none;
+		}
+	</style>
+
 	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 </head>
 
-<body class="flat ttrss_main ttrss_prefs">
+<body class="flat ttrss_main ttrss_prefs css_loading">
 
 <div id="notify" class="notify"></div>
 <div id="cmdline" style="display : none"></div>
@@ -154,13 +158,10 @@
         ?>
         </div>
     <div id="footer" dojoType="dijit.layout.ContentPane" region="bottom">
-        <a class="insensitive" target="_blank" href="http://tt-rss.org/">
-        Tiny Tiny RSS</a>
-        <?php if (!defined('HIDE_VERSION')) { ?>
-             v<?php echo VERSION ?>
-        <?php } ?>
+        <a class="text-muted" target="_blank" href="http://tt-rss.org/">
+        Tiny Tiny RSS</a> v<?php echo get_version() ?>
         &copy; 2005-<?php echo date('Y') ?>
-        <a class="insensitive" target="_blank"
+        <a class="text-muted" target="_blank"
         href="http://fakecake.org/">Andrew Dolgov</a>
     </div> <!-- footer -->
 </div>

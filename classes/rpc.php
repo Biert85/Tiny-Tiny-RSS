@@ -240,8 +240,8 @@ class RPC extends Handler_Protected {
 					$new_feed_id = (int)$row['id'] + 1;
 
 					$sth = $this->pdo->prepare("INSERT INTO ttrss_archived_feeds
-						(id, owner_uid, title, feed_url, site_url)
-							SELECT ?, owner_uid, title, feed_url, site_url from ttrss_feeds
+						(id, owner_uid, title, feed_url, site_url, created)
+							SELECT ?, owner_uid, title, feed_url, site_url, NOW() from ttrss_feeds
 							  	WHERE id = ?");
 
 					$sth->execute([$new_feed_id, $feed_id]);
@@ -287,7 +287,7 @@ class RPC extends Handler_Protected {
 	/* GET["cmode"] = 0 - mark as read, 1 - as unread, 2 - toggle */
 	function catchupSelected() {
 		$ids = explode(",", clean($_REQUEST["ids"]));
-		$cmode = sprintf("%d", clean($_REQUEST["cmode"]));
+		$cmode = (int)clean($_REQUEST["cmode"]);
 
 		Article::catchupArticlesById($ids, $cmode);
 
@@ -345,20 +345,6 @@ class RPC extends Handler_Protected {
 			print "<li>" . $line["caption"] . "</li>";
 		}
 		print "</ul>";
-	}
-
-	function updateFeedBrowser() {
-		if (defined('_DISABLE_FEED_BROWSER') && _DISABLE_FEED_BROWSER) return;
-
-		$search = clean($_REQUEST["search"]);
-		$limit = clean($_REQUEST["limit"]);
-		$mode = (int) clean($_REQUEST["mode"]);
-
-		require_once "feedbrowser.php";
-
-		print json_encode(array("content" =>
-			make_feed_browser($search, $limit, $mode),
-				"mode" => $mode));
 	}
 
 	// Silent
@@ -586,7 +572,7 @@ class RPC extends Handler_Protected {
 
 	function log() {
 		$msg = clean($_REQUEST['msg']);
-		$file = basename(clean($_REQUEST['file']));
+		$file = clean_filename($_REQUEST['file']);
 		$line = (int) clean($_REQUEST['line']);
 		$context = clean($_REQUEST['context']);
 
@@ -604,15 +590,20 @@ class RPC extends Handler_Protected {
 	function checkforupdates() {
 		$rv = [];
 
-		if (CHECK_FOR_UPDATES && $_SESSION["access_level"] >= 10 && defined("GIT_VERSION_TIMESTAMP")) {
-			$content = @fetch_file_contents(["url" => "https://tt-rss.org/version.json"]);
+		$git_timestamp = false;
+		$git_commit = false;
+
+		get_version($git_commit, $git_timestamp);
+
+		if (defined('CHECK_FOR_UPDATES') && CHECK_FOR_UPDATES && $_SESSION["access_level"] >= 10 && $git_timestamp) {
+			$content = @fetch_file_contents(["url" => "https://srv.tt-rss.org/version.json"]);
 
 			if ($content) {
 				$content = json_decode($content, true);
 
 				if ($content && isset($content["changeset"])) {
-					if ((int)GIT_VERSION_TIMESTAMP < (int)$content["changeset"]["timestamp"] &&
-						GIT_VERSION_HEAD != $content["changeset"]["id"]) {
+					if ($git_timestamp < (int)$content["changeset"]["timestamp"] &&
+						$git_commit != $content["changeset"]["id"]) {
 
 						$rv = $content["changeset"];
 					}

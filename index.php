@@ -23,7 +23,6 @@
 	require_once "sessions.php";
 	require_once "functions.php";
 	require_once "sanity_check.php";
-	require_once "version.php";
 	require_once "config.php";
 	require_once "db-prefs.php";
 
@@ -34,23 +33,16 @@
 	header('Content-Type: text/html; charset=utf-8');
 
 ?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
-	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!DOCTYPE html>
 <html>
 <head>
 	<title>Tiny Tiny RSS</title>
     <meta name="viewport" content="initial-scale=1,width=device-width" />
 
-	<script type="text/javascript">
-		var __ttrss_version = "<?php echo VERSION ?>"
-	</script>
-
 	<?php if ($_SESSION["uid"]) {
 		$theme = get_pref("USER_CSS_THEME", false, false);
 		if ($theme && theme_exists("$theme")) {
 			echo stylesheet_tag(get_theme_path($theme), 'theme_css');
-		} else {
-			echo stylesheet_tag("css/default.css", 'theme_css');
 		}
 	}
 	?>
@@ -117,11 +109,23 @@
 	?>
 	</script>
 
+	<style type="text/css">
+		@media (prefers-color-scheme: dark) {
+			body {
+				background : #303030;
+			}
+		}
+
+		body.css_loading * {
+			display : none;
+		}
+	</style>
+
 	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 	<meta name="referrer" content="no-referrer"/>
 </head>
 
-<body class="flat ttrss_main ttrss_index">
+<body class="flat ttrss_main ttrss_index css_loading">
 
 <div id="overlay" style="display : block">
 	<div id="overlay_inner">
@@ -141,12 +145,17 @@
         <div id="feedlistLoading">
             <img src='images/indicator_tiny.gif'/>
             <?php echo  __("Loading, please wait..."); ?></div>
+        <?php
+          foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_FEED_TREE) as $p) {
+            echo $p->hook_feed_tree();
+          }
+        ?>
         <div id="feedTree"></div>
     </div>
 
     <div dojoType="dijit.layout.BorderContainer" region="center" id="content-wrap">
         <div id="toolbar-frame" dojoType="dijit.layout.ContentPane" region="top">
-            <div id="toolbar" dojoType="dijit.Toolbar">
+            <div id="toolbar" dojoType="fox.Toolbar">
 
             <i class="material-icons net-alert" style="display : none"
                 title="<?php echo __("Communication problem with server.") ?>">error_outline</i>
@@ -163,15 +172,15 @@
             }
             ?>
 
-            <form id="toolbar-headlines" action="" onsubmit='return false'>
+            <form id="toolbar-headlines" action="" style="order : 10" onsubmit='return false'>
 
             </form>
 
-            <form id="toolbar-main" action="" onsubmit='return false'>
+            <form id="toolbar-main" action="" style="order : 20" onsubmit='return false'>
 
             <select name="view_mode" title="<?php echo __('Show articles') ?>"
                 onchange="App.onViewModeChanged()"
-                dojoType="dijit.form.Select">
+                dojoType="fox.form.Select">
                 <option selected="selected" value="adaptive"><?php echo __('Adaptive') ?></option>
                 <option value="all_articles"><?php echo __('All Articles') ?></option>
                 <option value="marked"><?php echo __('Starred') ?></option>
@@ -181,16 +190,17 @@
                 <!-- <option value="noscores"><?php echo __('Ignore Scoring') ?></option> -->
             </select>
 
-            <select title="<?php echo __('Sort articles') ?>"
+			<select title="<?php echo __('Sort articles') ?>"
                 onchange="App.onViewModeChanged()"
-                dojoType="dijit.form.Select" name="order_by">
-                <option selected="selected" value="default"><?php echo __('Default') ?></option>
+                dojoType="fox.form.Select" name="order_by">
+
+				<option selected="selected" value="default"><?php echo __('Default') ?></option>
                 <option value="feed_dates"><?php echo __('Newest first') ?></option>
                 <option value="date_reverse"><?php echo __('Oldest first') ?></option>
                 <option value="title"><?php echo __('Title') ?></option>
             </select>
 
-            <div dojoType="dijit.form.ComboButton" onclick="Feeds.catchupCurrent()">
+            <div dojoType="fox.form.ComboButton" onclick="Feeds.catchupCurrent()">
                 <span><?php echo __('Mark as read') ?></span>
                 <div dojoType="dijit.DropDownMenu">
                     <div dojoType="dijit.MenuItem" onclick="Feeds.catchupCurrent('1day')">
@@ -207,7 +217,7 @@
 
             </form>
 
-            <div class="action-chooser">
+            <div class="action-chooser" style="order : 30">
 
                 <?php
                     foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_TOOLBAR_BUTTON) as $p) {
@@ -215,8 +225,8 @@
                     }
                 ?>
 
-                <div dojoType="dijit.form.DropDownButton">
-                    <span><?php echo __('Actions...') ?></span>
+                <div dojoType="fox.form.DropDownButton" class="action-button" title="<?php echo __('Actions...') ?>">
+					<span><i class="material-icons">menu</i></span>
                     <div dojoType="dijit.Menu" style="display: none">
                         <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcPrefs')"><?php echo __('Preferences...') ?></div>
                         <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcSearch')"><?php echo __('Search...') ?></div>
@@ -229,7 +239,6 @@
                         <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcShowOnlyUnread')"><?php echo __('(Un)hide read feeds') ?></div>
                         <div dojoType="dijit.MenuItem" disabled="1"><?php echo __('Other actions:') ?></div>
                         <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcToggleWidescreen')"><?php echo __('Toggle widescreen mode') ?></div>
-                        <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcToggleNightMode')"><?php echo __('Toggle night mode') ?></div>
                         <div dojoType="dijit.MenuItem" onclick="App.onActionSelected('qmcHKhelp')"><?php echo __('Keyboard shortcuts help') ?></div>
 
                         <?php
