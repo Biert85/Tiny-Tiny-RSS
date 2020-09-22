@@ -3,66 +3,87 @@
 <html>
 <head>
 	<title>Tiny Tiny RSS : Login</title>
-	<?php echo stylesheet_tag("css/default.css") ?>
 	<link rel="shortcut icon" type="image/png" href="images/favicon.png">
 	<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 	<?php
 	foreach (array("lib/prototype.js",
 				"lib/dojo/dojo.js",
 				"lib/dojo/tt-rss-layer.js",
-				"js/common.js",
+				"lib/prototype.js",
+			 	"js/common.js",
+				"js/utility.js",
 				"errors.php?mode=js") as $jsfile) {
 
 		echo javascript_tag($jsfile);
 
 	} ?>
 
+	<style type="text/css">
+		@media (prefers-color-scheme: dark) {
+			body {
+				background : #303030;
+			}
+		}
+
+		body.css_loading * {
+			display : none;
+		}
+	</style>
+
 	<script type="text/javascript">
 		require({cache:{}});
 	</script>
 </head>
 
-<body class="flat ttrss_utility ttrss_login">
+<body class="flat ttrss_utility ttrss_login css_loading">
 
 <script type="text/javascript">
-require(['dojo/parser', "dojo/ready", 'dijit/form/Button','dijit/form/CheckBox', 'dijit/form/Form',
-    'dijit/form/Select','dijit/form/TextBox','dijit/form/ValidationTextBox'],function(parser, ready){
-        ready(function() {
-            parser.parse();
+	const UtilityApp = {
+        previousLogin: "",
+	    init: function() { /* invoked by UtilityJS */
+            require(['dojo/parser', "dojo/ready", 'dijit/form/Button','dijit/form/CheckBox', 'dijit/form/Form',
+                'dijit/form/Select','dijit/form/TextBox','dijit/form/ValidationTextBox'],function(parser, ready){
+                ready(function() {
+					parser.parse();
 
-            dijit.byId("bw_limit").attr("checked", Cookie.get("ttrss_bwlimit") == 'true');
-            if (dijit.byId("login").value) {
-                dijit.byId("password").focus();
-            } else {
-                dijit.byId("login").focus();
-            }
-        });
-});
-
-function fetchProfiles() {
-    xhrJson("public.php", { op: "getprofiles", login: dijit.byId("login").attr('value') },
-        (reply) => {
-			const profile = dijit.byId('profile');
-
-			profile.removeOption(profile.getOptions());
-
-			reply.each((p) => {
-				profile
-        			.attr("disabled", false)
-					.addOption(p);
+					dijit.byId("bw_limit").attr("checked", Cookie.get("ttrss_bwlimit") == 'true');
+					if (dijit.byId("login").value) {
+						dijit.byId("password").focus();
+					} else {
+						dijit.byId("login").focus();
+					}
+				});
 			});
-		});
-}
+		},
+        fetchProfiles: function() {
+	        const login = dijit.byId("login").attr('value');
 
-function gotoRegForm() {
-	window.location.href = "register.php";
-	return false;
-}
+	        if (login && login != this.previousLogin) {
+                this.previousLogin = login;
 
-function bwLimitChange(elem) {
-    Cookie.set("ttrss_bwlimit", elem.checked,
-        <?php print SESSION_COOKIE_LIFETIME ?>);
-}
+                xhrJson("public.php", {op: "getprofiles", login: login},
+                    (reply) => {
+                        const profile = dijit.byId('profile');
+
+                        profile.removeOption(profile.getOptions());
+
+                        reply.each((p) => {
+                            profile
+                                .attr("disabled", false)
+                                .addOption(p);
+                        });
+                    });
+            }
+	    },
+        gotoRegForm: function() {
+        	window.location.href = "register.php";
+        	return false;
+    	},
+        bwLimitChange: function(elem) {
+        	Cookie.set("ttrss_bwlimit", elem.checked,
+				<?php print SESSION_COOKIE_LIFETIME ?>);
+	    }
+    };
 </script>
 
 <?php $return = urlencode(make_self_url()) ?>
@@ -84,7 +105,9 @@ function bwLimitChange(elem) {
 			<fieldset>
 				<label><?php echo __("Login:") ?></label>
 				<input name="login" id="login" dojoType="dijit.form.TextBox" type="text"
-					   onchange="fetchProfiles()" onfocus="fetchProfiles()" onblur="fetchProfiles()"
+					   onchange="UtilityApp.fetchProfiles()"
+					   onfocus="UtilityApp.fetchProfiles()"
+					   onblur="UtilityApp.fetchProfiles()"
 					   required="1" value="<?php echo isset($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : $_SESSION["fake_login"] ?>" />
 			</fieldset>
 
@@ -94,9 +117,12 @@ function bwLimitChange(elem) {
 				<input type="password" name="password" id="password" required="1"
 					   dojoType="dijit.form.TextBox"
 					   class="input input-text"
+					   onchange="UtilityApp.fetchProfiles()"
+					   onfocus="UtilityApp.fetchProfiles()"
+					   onblur="UtilityApp.fetchProfiles()"
 					   value="<?php echo $_SESSION["fake_password"] ?>"/>
 			</fieldset>
-			<?php if (strpos(PLUGINS, "auth_internal") !== FALSE) { ?>
+			<?php if (strpos(PLUGINS, "auth_internal") !== false) { ?>
 				<fieldset class="align-right">
 					<a href="public.php?op=forgotpass"><?php echo __("I forgot my password") ?></a>
 				</fieldset>
@@ -114,13 +140,21 @@ function bwLimitChange(elem) {
 				<label> </label>
 
 				<label id="bw_limit_label"><input dojoType="dijit.form.CheckBox" name="bw_limit" id="bw_limit"
-					  type="checkbox" onchange="bwLimitChange(this)">
+					  type="checkbox" onchange="UtilityApp.bwLimitChange(this)">
 					<?php echo __("Use less traffic") ?></label>
 			</fieldset>
 
 			<div dojoType="dijit.Tooltip" connectId="bw_limit_label" position="below" style="display:none">
 				<?php echo __("Does not display images in articles, reduces automatic refreshes."); ?>
 			</div>
+
+			<fieldset class="narrow">
+				<label> </label>
+
+				<label ><input dojoType="dijit.form.CheckBox" name="safe_mode" id="safe_mode"
+					  type="checkbox">
+					<?php echo __("Safe mode (no plugins)") ?></label>
+			</fieldset>
 
 			<?php if (SESSION_COOKIE_LIFETIME > 0) { ?>
 
@@ -142,7 +176,7 @@ function bwLimitChange(elem) {
 				<button dojoType="dijit.form.Button" type="submit" class="alt-primary"><?php echo __('Log in') ?></button>
 
 				<?php if (defined('ENABLE_REGISTRATION') && ENABLE_REGISTRATION) { ?>
-					<button onclick="return gotoRegForm()" dojoType="dijit.form.Button">
+					<button onclick="return UtilityApp.gotoRegForm()" dojoType="dijit.form.Button">
 						<?php echo __("Create new account") ?></button>
 				<?php } ?>
 			</fieldset>

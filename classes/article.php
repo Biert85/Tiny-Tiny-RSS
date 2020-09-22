@@ -1,12 +1,6 @@
 <?php
 class Article extends Handler_Protected {
 
-	function csrf_ignore($method) {
-		$csrf_ignored = array("redirect", "editarticletags");
-
-		return array_search($method, $csrf_ignored) !== false;
-	}
-
 	function redirect() {
 		$id = clean($_REQUEST['id']);
 
@@ -26,69 +20,6 @@ class Article extends Handler_Protected {
 			print_error(__("Article not found."));
 		}
 	}
-
-	/*
-	function view() {
-		$id = clean($_REQUEST["id"]);
-		$cids = explode(",", clean($_REQUEST["cids"]));
-		$mode = clean($_REQUEST["mode"]);
-
-		// in prefetch mode we only output requested cids, main article
-		// just gets marked as read (it already exists in client cache)
-
-		$articles = array();
-
-		if ($mode == "") {
-			array_push($articles, $this->format_article($id, false));
-		} else if ($mode == "zoom") {
-			array_push($articles, $this->format_article($id, true, true));
-		} else if ($mode == "raw") {
-			if (isset($_REQUEST['html'])) {
-				header("Content-Type: text/html");
-				print '<link rel="stylesheet" type="text/css" href="css/default.css"/>';
-			}
-
-			$article = $this->format_article($id, false, isset($_REQUEST["zoom"]));
-			print $article['content'];
-			return;
-		}
-
-		$this->catchupArticleById($id, 0);
-
-		if (!$_SESSION["bw_limit"]) {
-			foreach ($cids as $cid) {
-				if ($cid) {
-					array_push($articles, $this->format_article($cid, false, false));
-				}
-			}
-		}
-
-		print json_encode($articles);
-	} */
-
-	/*
-	private function catchupArticleById($id, $cmode) {
-
-		if ($cmode == 0) {
-			$sth = $this->pdo->prepare("UPDATE ttrss_user_entries SET
-			unread = false,last_read = NOW()
-			WHERE ref_id = ? AND owner_uid = ?");
-		} else if ($cmode == 1) {
-            $sth = $this->pdo->prepare("UPDATE ttrss_user_entries SET
-			unread = true
-			WHERE ref_id = ? AND owner_uid = ?");
-		} else {
-            $sth = $this->pdo->prepare("UPDATE ttrss_user_entries SET
-			unread = NOT unread,last_read = NOW()
-			WHERE ref_id = ? AND owner_uid = ?");
-		}
-
-		$sth->execute([$id, $_SESSION['uid']]);
-
-		$feed_id = $this->getArticleFeed($id);
-		CCache::update($feed_id, $_SESSION["uid"]);
-	}
-	*/
 
 	static function create_published_article($title, $url, $content, $labels_str,
 			$owner_uid) {
@@ -123,7 +54,7 @@ class Article extends Handler_Protected {
 		if (!$title) $title = $url;
 		if (!$title && !$url) return false;
 
-		if (filter_var($url, FILTER_VALIDATE_URL) === FALSE) return false;
+		if (filter_var($url, FILTER_VALIDATE_URL) === false) return false;
 
 		$pdo = Db::pdo();
 
@@ -157,7 +88,7 @@ class Article extends Handler_Protected {
 						":id" => $ref_id];
 					$sth->execute($params);
 				}
-				
+
 				$sth = $pdo->prepare("UPDATE ttrss_user_entries SET published = true,
 						last_published = NOW() WHERE
 						int_id = ? AND owner_uid = ?");
@@ -228,7 +159,7 @@ class Article extends Handler_Protected {
 
 		$param = clean($_REQUEST['param']);
 
-		$tags = Article::get_article_tags($param);
+		$tags = self::get_article_tags($param);
 
 		$tags_str = join(", ", $tags);
 
@@ -330,7 +261,7 @@ class Article extends Handler_Protected {
 
 		$this->pdo->commit();
 
-		$tags = Article::get_article_tags($id);
+		$tags = self::get_article_tags($id);
 		$tags_str = $this->format_tags_string($tags, $id);
 		$tags_str_full = join(", ", $tags);
 
@@ -413,7 +344,7 @@ class Article extends Handler_Protected {
 	static function format_article_enclosures($id, $always_display_enclosures,
 									   $article_content, $hide_images = false) {
 
-		$result = Article::get_article_enclosures($id);
+		$result = self::get_article_enclosures($id);
 		$rv = '';
 
 		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_FORMAT_ENCLOSURES) as $plugin) {
@@ -456,7 +387,7 @@ class Article extends Handler_Protected {
 #				$entry .= " <a target=\"_blank\" href=\"" . htmlspecialchars($url) . "\" rel=\"noopener noreferrer\">" .
 #					$filename . " (" . $ctype . ")" . "</a>";
 
-				$entry = "<div onclick=\"popupOpenUrl('".htmlspecialchars($url)."')\"
+				$entry = "<div onclick=\"Article.popupOpenUrl('".htmlspecialchars($url)."')\"
 					dojoType=\"dijit.MenuItem\">$filename ($ctype)</div>";
 
 				array_push($entries_html, $entry);
@@ -536,7 +467,7 @@ class Article extends Handler_Protected {
 				else
 					$filename = "";
 
-				$rv .= "<div onclick='popupOpenUrl(\"".htmlspecialchars($entry["url"])."\")'
+				$rv .= "<div onclick='Article.popupOpenUrl(\"".htmlspecialchars($entry["url"])."\")'
 					dojoType=\"dijit.MenuItem\">".$filename . $title."</div>";
 
 			};
@@ -646,7 +577,7 @@ class Article extends Handler_Protected {
 
 		return "<div class='article-note $note_class'>
 			<i class='material-icons'>note</i>
-			<div $onclick class='body'>$note</div>			
+			<div $onclick class='body'>$note</div>
 			</div>";
 
 		return $str;
@@ -718,20 +649,10 @@ class Article extends Handler_Protected {
 		}
 
 		$sth->execute(array_merge($ids, [$owner_uid]));
-
-		/* update ccache */
-
-		$sth = $pdo->prepare("SELECT DISTINCT feed_id FROM ttrss_user_entries
-			WHERE ref_id IN ($ids_qmarks) AND owner_uid = ?");
-		$sth->execute(array_merge($ids, [$owner_uid]));
-
-		while ($line = $sth->fetch()) {
-			CCache::update($line["feed_id"], $owner_uid);
-		}
 	}
 
 	static function getLastArticleId() {
-		$pdo = DB::pdo();
+		$pdo = Db::pdo();
 
 		$sth = $pdo->prepare("SELECT ref_id AS id FROM ttrss_user_entries
 			WHERE owner_uid = ? ORDER BY ref_id DESC LIMIT 1");
@@ -836,7 +757,7 @@ class Article extends Handler_Protected {
 
 			if (!$article_image)
 				foreach ($enclosures as $enc) {
-					if (strpos($enc["content_type"], "image/") !== FALSE) {
+					if (strpos($enc["content_type"], "image/") !== false) {
 						$article_image = $enc["content_url"];
 						break;
 					}

@@ -28,7 +28,7 @@
 
 	if (!init_plugins()) return;
 
-	login_sequence();
+	UserHelper::login_sequence();
 
 	header('Content-Type: text/html; charset=utf-8');
 
@@ -39,7 +39,7 @@
 	<title>Tiny Tiny RSS</title>
     <meta name="viewport" content="initial-scale=1,width=device-width" />
 
-	<?php if ($_SESSION["uid"]) {
+	<?php if ($_SESSION["uid"] && !isset($_REQUEST["ignore-theme"])) {
 		$theme = get_pref("USER_CSS_THEME", false, false);
 		if ($theme && theme_exists("$theme")) {
 			echo stylesheet_tag(get_theme_path($theme), 'theme_css');
@@ -47,7 +47,11 @@
 	}
 	?>
 
-	<?php print_user_stylesheet() ?>
+	<script type="text/javascript">
+		const __csrf_token = "<?php echo $_SESSION["csrf_token"]; ?>";
+	</script>
+
+	<?php UserHelper::print_user_stylesheet() ?>
 
 	<style type="text/css">
 	<?php
@@ -198,6 +202,14 @@
                 <option value="feed_dates"><?php echo __('Newest first') ?></option>
                 <option value="date_reverse"><?php echo __('Oldest first') ?></option>
                 <option value="title"><?php echo __('Title') ?></option>
+
+				<?php foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_HEADLINES_CUSTOM_SORT_MAP) as $p) {
+					$sort_map = $p->hook_headlines_custom_sort_map();
+
+					foreach ($sort_map as $sort_value => $sort_title) {
+						print "<option value=\"" . htmlspecialchars($sort_value) . "\">$sort_title</option>";
+					}
+				} ?>
             </select>
 
             <div dojoType="fox.form.ComboButton" onclick="Feeds.catchupCurrent()">
@@ -256,7 +268,6 @@
         </div> <!-- toolbar -->
         </div> <!-- toolbar pane -->
         <div id="headlines-wrap-inner" dojoType="dijit.layout.BorderContainer" region="center">
-            <div id="floatingTitle" style="display : none"></div>
             <div id="headlines-frame" dojoType="dijit.layout.ContentPane" tabindex="0"
                     region="center">
                 <div id="headlinesInnerContainer">

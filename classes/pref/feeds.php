@@ -449,7 +449,7 @@ class Pref_Feeds extends Handler_Protected {
 		if ($row = $sth->fetch()) {
 			@unlink(ICONS_DIR . "/$feed_id.ico");
 
-			$sth = $this->pdo->prepare("UPDATE ttrss_feeds SET favicon_avg_color = NULL
+			$sth = $this->pdo->prepare("UPDATE ttrss_feeds SET favicon_avg_color = NULL, favicon_last_checked = '1970-01-01'
 				where id = ?");
 			$sth->execute([$feed_id]);
 		}
@@ -554,7 +554,7 @@ class Pref_Feeds extends Handler_Protected {
 			$last_error = $row["last_error"];
 
 			if ($last_error) {
-				print "&nbsp;<i class=\"material-icons\" 
+				print "&nbsp;<i class=\"material-icons\"
 					title=\"".htmlspecialchars($last_error)."\">error</i>";
 			}
 
@@ -676,7 +676,7 @@ class Pref_Feeds extends Handler_Protected {
 			$auth_checked = $auth_enabled ? 'checked' : '';
 			print "<label class='checkbox'>
 				<input type='checkbox' $auth_checked name='need_auth' dojoType='dijit.form.CheckBox' id='feedEditDlg_loginCheck'
-						onclick='displayIfChecked(this, \"feedEditDlg_loginContainer\")'>
+						onclick='App.displayIfChecked(this, \"feedEditDlg_loginContainer\")'>
 					".__('This feed requires authentication.')."</label>";
 
 			print '</div><div dojoType="dijit.layout.ContentPane" title="'.__('Options').'">';
@@ -772,6 +772,7 @@ class Pref_Feeds extends Handler_Protected {
 				<input style='display: none' id='icon_file' size='10' name='icon_file' type='file'>
 			</label>
 			<input type='hidden' name='op' value='pref-feeds'>
+			<input type='hidden' name='csrf_token' value='".$_SESSION['csrf_token']."'>
 			<input type='hidden' name='feed_id' value='$feed_id'>
 			<input type='hidden' name='method' value='uploadicon'>
 			<button dojoType='dijit.form.Button' onclick=\"return CommonDialogs.uploadFeedIcon();\"
@@ -1150,7 +1151,7 @@ class Pref_Feeds extends Handler_Protected {
 		$ids = explode(",", clean($_REQUEST["ids"]));
 
 		foreach ($ids as $id) {
-			Pref_Feeds::remove_feed($id, $_SESSION["uid"]);
+			self::remove_feed($id, $_SESSION["uid"]);
 		}
 
 		return;
@@ -1172,7 +1173,7 @@ class Pref_Feeds extends Handler_Protected {
 	function index() {
 
 		print "<div dojoType='dijit.layout.AccordionContainer' region='center'>";
-		print "<div style='padding : 0px' dojoType='dijit.layout.AccordionPane' 
+		print "<div style='padding : 0px' dojoType='dijit.layout.AccordionPane'
 			title=\"<i class='material-icons'>rss_feed</i> ".__('Feeds')."\">";
 
 		$sth = $this->pdo->prepare("SELECT COUNT(id) AS num_errors
@@ -1307,7 +1308,7 @@ class Pref_Feeds extends Handler_Protected {
 
 		print "</div>"; # feeds pane
 
-		print "<div dojoType='dijit.layout.AccordionPane' 
+		print "<div dojoType='dijit.layout.AccordionPane'
 			title='<i class=\"material-icons\">import_export</i> ".__('OPML')."'>";
 
 		print "<h3>" . __("Using OPML you can export and import your feeds, filters, labels and Tiny Tiny RSS settings.") . "</h3>";
@@ -1325,6 +1326,7 @@ class Pref_Feeds extends Handler_Protected {
 				<input style='display : none' id='opml_file' name='opml_file' type='file'>&nbsp;
 			</label>
 			<input type='hidden' name='op' value='dlg'>
+			<input type='hidden' name='csrf_token' value='".$_SESSION['csrf_token']."'>
 			<input type='hidden' name='method' value='importOpml'>
 			<button dojoType='dijit.form.Button' class='alt-primary' onclick=\"return Helpers.OPML.import();\" type=\"submit\">" .
 			__('Import OPML') . "</button>";
@@ -1360,7 +1362,7 @@ class Pref_Feeds extends Handler_Protected {
 
 		print "</div>"; # pane
 
-		print "<div dojoType=\"dijit.layout.AccordionPane\" 
+		print "<div dojoType=\"dijit.layout.AccordionPane\"
 			title=\"<i class='material-icons'>share</i> ".__('Published & shared articles / Generated feeds')."\">";
 
 		print "<h3>" . __('Published articles can be subscribed by anyone who knows the following URL:') . "</h3>";
@@ -1389,17 +1391,11 @@ class Pref_Feeds extends Handler_Protected {
 		$obj = array();
 		$cat_id = (int) $cat_id;
 
-		if ($cat_id > 0) {
-			$cat_unread = CCache::find($cat_id, $_SESSION["uid"], true);
-		} else if ($cat_id == 0 || $cat_id == -2) {
-			$cat_unread = Feeds::getCategoryUnread($cat_id);
-		}
-
 		$obj['id'] = 'CAT:' . $cat_id;
 		$obj['items'] = array();
 		$obj['name'] = Feeds::getCategoryTitle($cat_id);
 		$obj['type'] = 'category';
-		$obj['unread'] = (int) $cat_unread;
+		$obj['unread'] = -1; //(int) Feeds::getCategoryUnread($cat_id);
 		$obj['bare_id'] = $cat_id;
 
 		return $obj;
@@ -1562,12 +1558,9 @@ class Pref_Feeds extends Handler_Protected {
 	}
 
 	private function remove_feed_category($id, $owner_uid) {
-
 		$sth = $this->pdo->prepare("DELETE FROM ttrss_feed_categories
 			WHERE id = ? AND owner_uid = ?");
 		$sth->execute([$id, $owner_uid]);
-
-		CCache::remove($id, $owner_uid, true);
 	}
 
 	static function remove_feed($id, $owner_uid) {
@@ -1640,15 +1633,14 @@ class Pref_Feeds extends Handler_Protected {
 				unlink(ICONS_DIR . "/$id.ico");
 			}
 
-			CCache::remove($id, $owner_uid);
-
 		} else {
 			Labels::remove(Labels::feed_to_label_id($id), $owner_uid);
-			//CCache::remove($id, $owner_uid); don't think labels are cached
 		}
 	}
 
 	function batchSubscribe() {
+		print "<form onsubmit='return false'>";
+
 		print_hidden("op", "pref-feeds");
 		print_hidden("method", "batchaddfeeds");
 
@@ -1657,7 +1649,7 @@ class Pref_Feeds extends Handler_Protected {
 
 		print "<textarea
 			style='font-size : 12px; width : 98%; height: 200px;'
-			dojoType='dijit.form.SimpleTextarea' name='feeds'></textarea>";
+			dojoType='fox.form.ValidationTextArea' required='1' name='feeds'></textarea>";
 
 		if (get_pref('ENABLE_FEED_CATS')) {
 			print "<fieldset>";
@@ -1682,14 +1674,17 @@ class Pref_Feeds extends Handler_Protected {
 
 		print "<fieldset class='narrow'>
 			<label class='checkbox'><input type='checkbox' name='need_auth' dojoType='dijit.form.CheckBox'
-					onclick='displayIfChecked(this, \"feedDlg_loginContainer\")'> ".
+					onclick='App.displayIfChecked(this, \"feedDlg_loginContainer\")'> ".
 				__('Feeds require authentication.')."</label></div>";
 		print "</fieldset>";
 
 		print "<footer>
-			<button dojoType='dijit.form.Button' type='submit' class='alt-primary'>".__('Subscribe')."</button>
+			<button dojoType='dijit.form.Button' onclick=\"return dijit.byId('batchSubDlg').execute()\" type='submit' class='alt-primary'>".
+				__('Subscribe')."</button>
 			<button dojoType='dijit.form.Button' onclick=\"return dijit.byId('batchSubDlg').hide()\">".__('Cancel')."</button>
 			</footer>";
+
+		print "</form>";
 	}
 
 	function batchAddFeeds() {
@@ -1708,7 +1703,7 @@ class Pref_Feeds extends Handler_Protected {
 		foreach ($feeds as $feed) {
 			$feed = trim($feed);
 
-			if (Feeds::validate_feed_url($feed)) {
+			if (UrlHelper::validate($feed)) {
 
 				$this->pdo->beginTransaction();
 

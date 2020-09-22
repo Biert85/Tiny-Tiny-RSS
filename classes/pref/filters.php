@@ -3,7 +3,7 @@ class Pref_Filters extends Handler_Protected {
 
 	function csrf_ignore($method) {
 		$csrf_ignored = array("index", "getfiltertree", "edit", "newfilter", "newrule",
-			"newaction", "savefilterorder");
+			"newaction", "savefilterorder", "testfilterdlg");
 
 		return array_search($method, $csrf_ignored) !== false;
 	}
@@ -159,22 +159,19 @@ class Pref_Filters extends Handler_Protected {
 		print json_encode($rv);
 	}
 
-	function testFilter() {
+	function testFilterDlg() {
+		?>
+			<div>
+				<img id='prefFilterLoadingIndicator' src='images/indicator_tiny.gif'>&nbsp;
+				<span id='prefFilterProgressMsg'>Looking for articles...</span>
+			</div>
 
-		if (isset($_REQUEST["offset"])) return $this->testFilterDo();
+			<ul class='panel panel-scrollable list list-unstyled' id='prefFilterTestResultList'></ul>
 
-		//print __("Articles matching this filter:");
-
-		print "<div><img id='prefFilterLoadingIndicator' src='images/indicator_tiny.gif'>&nbsp;<span id='prefFilterProgressMsg'>Looking for articles...</span></div>";
-
-		print "<ul class='panel panel-scrollable list list-unstyled' id='prefFilterTestResultList'>";
-		print "</ul>";
-
-		print "<footer class='text-center'>";
-		print "<button dojoType='dijit.form.Button' onclick=\"dijit.byId('filterTestDlg').hide()\">".
-			__('Close this window')."</button>";
-		print "</footer>";
-
+			<footer class='text-center'>
+				<button dojoType='dijit.form.Button' onclick="dijit.byId('filterTestDlg').hide()"><?php echo __('Close this window') ?></button>
+			</footer>
+		<?php
 	}
 
 	private function getfilterrules_list($filter_id) {
@@ -241,6 +238,7 @@ class Pref_Filters extends Handler_Protected {
 		$root = array();
 		$root['id'] = 'root';
 		$root['name'] = __('Filters');
+		$root['enabled'] = true;
 		$root['items'] = array();
 
 		$filter_search = $_SESSION["prefs_filter_search"];
@@ -305,7 +303,7 @@ class Pref_Filters extends Handler_Protected {
 			$filter['param'] = $name[1];
 			$filter['checkbox'] = false;
 			$filter['last_triggered'] = $line["last_triggered"] ? make_local_datetime($line["last_triggered"], false) : null;
-			$filter['enabled'] = $line["enabled"];
+			$filter['enabled'] = sql_bool_to_bool($line["enabled"]);
 			$filter['rules'] = $this->getfilterrules_list($line['id']);
 
 			if (!$filter_search || $match_ok) {
@@ -600,10 +598,6 @@ class Pref_Filters extends Handler_Protected {
 	}
 
 	function editSave() {
-		if (clean($_REQUEST["savemode"] && $_REQUEST["savemode"]) == "test") {
-			return $this->testFilter();
-		}
-
 		$filter_id = clean($_REQUEST["id"]);
 		$enabled = checkbox_to_sql_bool(clean($_REQUEST["enabled"]));
 		$match_any_rule = checkbox_to_sql_bool(clean($_REQUEST["match_any_rule"]));
@@ -714,10 +708,6 @@ class Pref_Filters extends Handler_Protected {
 	}
 
 	function add() {
-		if (clean($_REQUEST["savemode"] && $_REQUEST["savemode"]) == "test") {
-			return $this->testFilter();
-		}
-
 		$enabled = checkbox_to_sql_bool(clean($_REQUEST["enabled"]));
 		$match_any_rule = checkbox_to_sql_bool(clean($_REQUEST["match_any_rule"]));
 		$title = clean($_REQUEST["title"]);
@@ -975,19 +965,18 @@ class Pref_Filters extends Handler_Protected {
 
 		print "<section>";
 
-		print "<input dojoType=\"dijit.form.ValidationTextBox\"
-			 required=\"true\" id=\"filterDlg_regExp\" 
-			 onchange='Filters.filterDlgCheckRegExp(this)'
-			 onblur='Filters.filterDlgCheckRegExp(this)'
-			 onfocus='Filters.filterDlgCheckRegExp(this)'
-			 style=\"font-size : 16px; width : 500px\"
-			 name=\"reg_exp\" value=\"$reg_exp\"/>";
+		print "<textarea dojoType='fox.form.ValidationTextArea'
+			 required='true' id='filterDlg_regExp'
+			 ValidRegExp='true'
+			 rows='4'
+			 style='font-size : 14px; width : 490px; word-break: break-all'
+			 name='reg_exp'>$reg_exp</textarea>";
 
 		print "<div dojoType='dijit.Tooltip' id='filterDlg_regExp_tip' connectId='filterDlg_regExp' position='below'></div>";
 
 		print "<fieldset>";
-		print "<label class='checkbox'><input id=\"filterDlg_inverse\" dojoType=\"dijit.form.CheckBox\"
-			 name=\"inverse\" $inverse_checked/> ".
+		print "<label class='checkbox'><input id='filterDlg_inverse' dojoType='dijit.form.CheckBox'
+			 name='inverse' $inverse_checked/> ".
 		 	__("Inverse regular expression matching")."</label>";
 		print "</fieldset>";
 

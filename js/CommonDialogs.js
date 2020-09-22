@@ -1,8 +1,9 @@
 'use strict'
-/* global __, ngettext */
-define(["dojo/_base/declare"], function (declare) {
-	// noinspection JSUnusedGlobalSymbols
-	CommonDialogs = {
+
+/* global __, ngettext, dojo, dijit, Notify, App, Feeds, $$, xhrPost, xhrJson, Tables, Effect */
+
+/* exported CommonDialogs */
+const	CommonDialogs = {
 		closeInfoBox: function() {
 			const dialog = dijit.byId("infoBox");
 			if (dialog)	dialog.hide();
@@ -45,18 +46,20 @@ define(["dojo/_base/declare"], function (declare) {
 				xhr.onload = function () {
 					switch (parseInt(this.responseText)) {
 						case 0:
-							Notify.info("Upload complete.");
+							{
+								Notify.info("Upload complete.");
 
-							if (App.isPrefs())
-								dijit.byId("feedTree").reload();
-							else
-								Feeds.reload();
+								if (App.isPrefs())
+									dijit.byId("feedTree").reload();
+								else
+									Feeds.reload();
 
-							const icon = $$(".feed-editor-icon")[0];
+								const icon = $$(".feed-editor-icon")[0];
 
-							if (icon)
-								icon.src = icon.src.replace(/\?[0-9]+$/, "?" + new Date().getTime());
+								if (icon)
+									icon.src = icon.src.replace(/\?[0-9]+$/, "?" + new Date().getTime());
 
+							}
 							break;
 						case 1:
 							Notify.error("Upload failed: icon is too big.");
@@ -72,115 +75,120 @@ define(["dojo/_base/declare"], function (declare) {
 			return false;
 		},
 		quickAddFeed: function() {
-			const query = "backend.php?op=feeds&method=quickAddFeed";
 
 			// overlapping widgets
 			if (dijit.byId("batchSubDlg")) dijit.byId("batchSubDlg").destroyRecursive();
 			if (dijit.byId("feedAddDlg")) dijit.byId("feedAddDlg").destroyRecursive();
 
-			const dialog = new dijit.Dialog({
-				id: "feedAddDlg",
-				title: __("Subscribe to Feed"),
-				style: "width: 600px",
-				show_error: function (msg) {
-					const elem = $("fadd_error_message");
+			xhrPost("backend.php",
+					{op: "feeds", method: "quickAddFeed"},
+					(transport) => {
 
-					elem.innerHTML = msg;
+						const dialog = new dijit.Dialog({
+							id: "feedAddDlg",
+							title: __("Subscribe to Feed"),
+							style: "width: 600px",
+							content: transport.responseText,
+							show_error: function (msg) {
+								const elem = $("fadd_error_message");
 
-					if (!Element.visible(elem))
-						new Effect.Appear(elem);
+								elem.innerHTML = msg;
 
-				},
-				execute: function () {
-					if (this.validate()) {
-						console.log(dojo.objectToQuery(this.attr('value')));
+								if (!Element.visible(elem))
+									new Effect.Appear(elem);
 
-						const feed_url = this.attr('value').feed;
+							},
+							execute: function () {
+								if (this.validate()) {
+									console.log(dojo.objectToQuery(this.attr('value')));
 
-						Element.show("feed_add_spinner");
-						Element.hide("fadd_error_message");
+									const feed_url = this.attr('value').feed;
 
-						xhrPost("backend.php", this.attr('value'), (transport) => {
-							try {
+									Element.show("feed_add_spinner");
+									Element.hide("fadd_error_message");
 
-								try {
-									var reply = JSON.parse(transport.responseText);
-								} catch (e) {
-									Element.hide("feed_add_spinner");
-									alert(__("Failed to parse output. This can indicate server timeout and/or network issues. Backend output was logged to browser console."));
-									console.log('quickAddFeed, backend returned:' + transport.responseText);
-									return;
-								}
+									xhrPost("backend.php", this.attr('value'), (transport) => {
+										try {
 
-								const rc = reply['result'];
+											let reply;
 
-								Notify.close();
-								Element.hide("feed_add_spinner");
-
-								console.log(rc);
-
-								switch (parseInt(rc['code'])) {
-									case 1:
-										dialog.hide();
-										Notify.info(__("Subscribed to %s").replace("%s", feed_url));
-
-										if (App.isPrefs())
-											dijit.byId("feedTree").reload();
-										else
-											Feeds.reload();
-
-										break;
-									case 2:
-										dialog.show_error(__("Specified URL seems to be invalid."));
-										break;
-									case 3:
-										dialog.show_error(__("Specified URL doesn't seem to contain any feeds."));
-										break;
-									case 4:
-										const feeds = rc['feeds'];
-
-										Element.show("fadd_multiple_notify");
-
-										const select = dijit.byId("feedDlg_feedContainerSelect");
-
-										while (select.getOptions().length > 0)
-											select.removeOption(0);
-
-										select.addOption({value: '', label: __("Expand to select feed")});
-
-										let count = 0;
-										for (const feedUrl in feeds) {
-											if (feeds.hasOwnProperty(feedUrl)) {
-												select.addOption({value: feedUrl, label: feeds[feedUrl]});
-												count++;
+											try {
+												reply = JSON.parse(transport.responseText);
+											} catch (e) {
+												Element.hide("feed_add_spinner");
+												alert(__("Failed to parse output. This can indicate server timeout and/or network issues. Backend output was logged to browser console."));
+												console.log('quickAddFeed, backend returned:' + transport.responseText);
+												return;
 											}
+
+											const rc = reply['result'];
+
+											Notify.close();
+											Element.hide("feed_add_spinner");
+
+											console.log(rc);
+
+											switch (parseInt(rc['code'])) {
+												case 1:
+													dialog.hide();
+													Notify.info(__("Subscribed to %s").replace("%s", feed_url));
+
+													if (App.isPrefs())
+														dijit.byId("feedTree").reload();
+													else
+														Feeds.reload();
+
+													break;
+												case 2:
+													dialog.show_error(__("Specified URL seems to be invalid."));
+													break;
+												case 3:
+													dialog.show_error(__("Specified URL doesn't seem to contain any feeds."));
+													break;
+												case 4:
+													{
+														const feeds = rc['feeds'];
+
+														Element.show("fadd_multiple_notify");
+
+														const select = dijit.byId("feedDlg_feedContainerSelect");
+
+														while (select.getOptions().length > 0)
+															select.removeOption(0);
+
+														select.addOption({value: '', label: __("Expand to select feed")});
+
+														for (const feedUrl in feeds) {
+															if (feeds.hasOwnProperty(feedUrl)) {
+																select.addOption({value: feedUrl, label: feeds[feedUrl]});
+															}
+														}
+
+														Effect.Appear('feedDlg_feedsContainer', {duration: 0.5});
+													}
+													break;
+												case 5:
+													dialog.show_error(__("Couldn't download the specified URL: %s").replace("%s", rc['message']));
+													break;
+												case 6:
+													dialog.show_error(__("XML validation failed: %s").replace("%s", rc['message']));
+													break;
+												case 0:
+													dialog.show_error(__("You are already subscribed to this feed."));
+													break;
+											}
+
+										} catch (e) {
+											console.error(transport.responseText);
+											App.Error.report(e);
 										}
-
-										Effect.Appear('feedDlg_feedsContainer', {duration: 0.5});
-
-										break;
-									case 5:
-										dialog.show_error(__("Couldn't download the specified URL: %s").replace("%s", rc['message']));
-										break;
-									case 6:
-										dialog.show_error(__("XML validation failed: %s").replace("%s", rc['message']));
-										break;
-									case 0:
-										dialog.show_error(__("You are already subscribed to this feed."));
-										break;
+									});
 								}
-
-							} catch (e) {
-								console.error(transport.responseText);
-								App.Error.report(e);
-							}
+							},
 						});
-					}
-				},
-				href: query
-			});
 
-			dialog.show();
+						dialog.show();
+					});
 		},
 		showFeedsWithErrors: function() {
 			const query = {op: "pref-feeds", method: "feedsWithErrors"};
@@ -436,7 +444,7 @@ define(["dojo/_base/declare"], function (declare) {
 							Notify.close();
 
 							if (App.isPrefs())
-								dijit.byId("feedTree").reload();
+								dijit.byId("feedTree") && dijit.byId("feedTree").reload();
 							else
 								Feeds.reload();
 
@@ -478,6 +486,3 @@ define(["dojo/_base/declare"], function (declare) {
 			return false;
 		}
 	};
-
-	return CommonDialogs;
-});

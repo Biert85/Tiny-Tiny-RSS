@@ -22,7 +22,7 @@ class Auth_Internal extends Plugin implements IAuthModule {
 
 		$pwd_hash1 = encrypt_password($password);
 		$pwd_hash2 = encrypt_password($password, $login);
-		$otp = $_REQUEST["otp"];
+		$otp = (int)$_REQUEST["otp"];
 
 		if (get_schema_version() > 96) {
 
@@ -52,7 +52,7 @@ class Auth_Internal extends Plugin implements IAuthModule {
 						$totp_legacy = new \OTPHP\TOTP($secret_legacy);
 						$otp_check_legacy = $totp_legacy->now();
 
-						if ($otp != $otp_check && $otp != $otp_check_legacy) {
+						if ($otp !== $otp_check && $otp !== $otp_check_legacy) {
 							return false;
 						}
 					} else {
@@ -64,7 +64,7 @@ class Auth_Internal extends Plugin implements IAuthModule {
 								<title>Tiny Tiny RSS</title>
 								<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
 							</head>
-							<?php echo stylesheet_tag("css/default.css") ?>
+							<?php echo stylesheet_tag("themes/light.css") ?>
 						<body class="ttrss_utility otp">
 						<h1><?php echo __("Authentication") ?></h1>
 						<div class="content">
@@ -235,11 +235,9 @@ class Auth_Internal extends Plugin implements IAuthModule {
 			if ($row = $sth->fetch()) {
 				$mailer = new Mailer();
 
-				require_once "lib/MiniTemplator.class.php";
+				$tpl = new Templator();
 
-				$tpl = new MiniTemplator;
-
-				$tpl->readTemplateFromFile("templates/password_change_template.txt");
+				$tpl->readTemplateFromFile("password_change_template.txt");
 
 				$tpl->setVariable('LOGIN', $row["login"]);
 				$tpl->setVariable('TTRSS_HOST', SELF_URL_PATH);
@@ -262,8 +260,8 @@ class Auth_Internal extends Plugin implements IAuthModule {
 	}
 
 	private function check_app_password($login, $password, $service) {
-		$sth = $this->pdo->prepare("SELECT p.id, p.pwd_hash, u.id AS uid 
-			FROM ttrss_app_passwords p, ttrss_users u 
+		$sth = $this->pdo->prepare("SELECT p.id, p.pwd_hash, u.id AS uid
+			FROM ttrss_app_passwords p, ttrss_users u
 			WHERE p.owner_uid = u.id AND u.login = ? AND service = ?");
 		$sth->execute([$login, $service]);
 

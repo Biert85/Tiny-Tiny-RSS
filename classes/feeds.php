@@ -8,7 +8,7 @@ class Feeds extends Handler_Protected {
     private $params;
 
     function csrf_ignore($method) {
-		$csrf_ignored = array("index", "quickaddfeed", "search");
+		$csrf_ignored = array("index");
 
 		return array_search($method, $csrf_ignored) !== false;
 	}
@@ -204,13 +204,13 @@ class Feeds extends Handler_Protected {
 		}
 
 		$vfeed_group_enabled = get_pref("VFEED_GROUP_BY_FEED") &&
-			!(in_array($feed, Feeds::NEVER_GROUP_FEEDS) && !$cat_view);
+			!(in_array($feed, self::NEVER_GROUP_FEEDS) && !$cat_view);
 
 		$result = $qfh_ret[0]; // this could be either a PDO query result or a -1 if first id changed
 		$feed_title = $qfh_ret[1];
 		$feed_site_url = $qfh_ret[2];
 		$last_error = $qfh_ret[3];
-		$last_updated = strpos($qfh_ret[4], '1970-') === FALSE ?
+		$last_updated = strpos($qfh_ret[4], '1970-') === false ?
 			make_local_datetime($qfh_ret[4], false) : __("Never");
 		$highlight_words = $qfh_ret[5];
 		$reply['first_id'] = $qfh_ret[6];
@@ -305,7 +305,7 @@ class Feeds extends Handler_Protected {
                     $line["buttons"] .= $p->hook_article_button($line);
                 }
 
-                $line["content"] = sanitize($line["content"],
+                $line["content"] = Sanitizer::sanitize($line["content"],
                     $line['hide_images'], false, $line["site_url"], $highlight_words, $line["id"]);
 
                 foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_RENDER_ARTICLE_CDM) as $p) {
@@ -357,7 +357,7 @@ class Feeds extends Handler_Protected {
 
 				$line["tags_str"] = Article::format_tags_string($tags, $id);
 
-				if (feeds::feedHasIcon($feed_id)) {
+				if (self::feedHasIcon($feed_id)) {
 					$line['feed_icon'] = "<img class=\"icon\" src=\"".ICONS_URL."/$feed_id.ico\" alt=\"\">";
 				} else {
 					$line['feed_icon'] = "<i class='icon-no-feed material-icons'>rss_feed</i>";
@@ -457,8 +457,6 @@ class Feeds extends Handler_Protected {
 		$sth = $this->pdo->prepare("UPDATE ttrss_user_entries SET
 						last_read = NOW(), unread = false WHERE unread = true AND owner_uid = ?");
 		$sth->execute([$_SESSION['uid']]);
-
-		CCache::zero_all($_SESSION["uid"]);
 	}
 
 	function view() {
@@ -512,13 +510,6 @@ class Feeds extends Handler_Protected {
 			return;
 		}
 
-		/* Updating a label ccache means recalculating all of the caches
-		 * so for performance reasons we don't do that here */
-
-		if ($feed >= 0) {
-			CCache::update($feed, $_SESSION["uid"], $cat_view);
-		}
-
 		set_pref("_DEFAULT_VIEW_MODE", $view_mode);
 		set_pref("_DEFAULT_VIEW_ORDER_BY", $order_by);
 
@@ -538,21 +529,7 @@ class Feeds extends Handler_Protected {
 
 		$reply['headlines'] = [];
 
-		$override_order = false;
-		$skip_first_id_check = false;
-
-		switch ($order_by) {
-		case "title":
-			$override_order = "ttrss_entries.title, date_entered, updated";
-			break;
-		case "date_reverse":
-			$override_order = "score DESC, date_entered, updated";
-			$skip_first_id_check = true;
-			break;
-		case "feed_dates":
-			$override_order = "updated DESC";
-			break;
-		}
+		list($override_order, $skip_first_id_check) = self::order_to_override_query($order_by);
 
 		$ret = $this->format_headlines_list($feed, $method,
 			$view_mode, $limit, $cat_view, $offset,
@@ -573,7 +550,7 @@ class Feeds extends Handler_Protected {
             						"disable_cache" => (bool) $disable_cache];
 
 		// this is parsed by handleRpcJson() on first viewfeed() to set cdm expanded, etc
-		$reply['runtime-info'] = make_runtime_info();
+		$reply['runtime-info'] = RPC::make_runtime_info();
 
 		$reply_json = json_encode($reply);
 
@@ -710,12 +687,12 @@ class Feeds extends Handler_Protected {
 		print "<section>";
 		print "<label>
 			<label class='checkbox'><input type='checkbox' name='need_auth' dojoType='dijit.form.CheckBox' id='feedDlg_loginCheck'
-					onclick='displayIfChecked(this, \"feedDlg_loginContainer\")'>
+					onclick='App.displayIfChecked(this, \"feedDlg_loginContainer\")'>
 				".__('This feed requires authentication.')."</label>";
 		print "</section>";
 
 		print "<footer>";
-		print "<button dojoType='dijit.form.Button' class='alt-primary' type='submit' 
+		print "<button dojoType='dijit.form.Button' class='alt-primary' type='submit'
 				onclick=\"return dijit.byId('feedAddDlg').execute()\">".__('Subscribe')."</button>";
 
 		print "<button dojoType='dijit.form.Button' onclick=\"return dijit.byId('feedAddDlg').hide()\">".__('Cancel')."</button>";
@@ -774,7 +751,7 @@ class Feeds extends Handler_Protected {
 
 		$feed_id = (int)$_REQUEST["feed_id"];
 		@$do_update = $_REQUEST["action"] == "do_update";
-		$csrf_token = $_REQUEST["csrf_token"];
+		$csrf_token = $_POST["csrf_token"];
 
 		$sth = $this->pdo->prepare("SELECT id FROM ttrss_feeds WHERE id = ? AND owner_uid = ?");
 		$sth->execute([$feed_id, $_SESSION['uid']]);
@@ -791,16 +768,25 @@ class Feeds extends Handler_Protected {
 		<!DOCTYPE html>
 		<html>
 		<head>
-			<?php echo stylesheet_tag("css/default.css") ?>
 			<title>Feed Debugger</title>
+			<style type='text/css'>
+				@media (prefers-color-scheme: dark) {
+					body {
+						background : #222;
+					}
+				}
+				body.css_loading * {
+					display : none;
+				}
+			</style>
 			<?php
-				echo stylesheet_tag("css/default.css");
 				echo javascript_tag("lib/prototype.js");
+				echo javascript_tag("js/utility.js");
 				echo javascript_tag("lib/dojo/dojo.js");
 				echo javascript_tag("lib/dojo/tt-rss-layer.js");
 			?>
 		</head>
-		<body class="flat ttrss_utility feed_debugger">
+		<body class="flat ttrss_utility feed_debugger css_loading">
 		<script type="text/javascript">
 			require(['dojo/parser', "dojo/ready", 'dijit/form/Button','dijit/form/CheckBox', 'dijit/form/Form',
 				'dijit/form/Select','dijit/form/TextBox','dijit/form/ValidationTextBox'],function(parser, ready){
@@ -813,7 +799,7 @@ class Feeds extends Handler_Protected {
 			<div class="container">
 				<h1>Feed Debugger: <?php echo "$feed_id: " . $this->getFeedTitle($feed_id) ?></h1>
 				<div class="content">
-					<form method="GET" action="">
+					<form method="post" action="">
 						<input type="hidden" name="op" value="feeds">
 						<input type="hidden" name="method" value="update_debugger">
 						<input type="hidden" name="xdebug" value="1">
@@ -865,7 +851,7 @@ class Feeds extends Handler_Protected {
 
 			// fall back in case of no plugins
 			if (!$search_qpart) {
-				list($search_qpart, $search_words) = Feeds::search_to_sql($search[0], $search[1]);
+				list($search_qpart, $search_words) = self::search_to_sql($search[0], $search[1]);
 			}
 		} else {
 			$search_qpart = "true";
@@ -905,7 +891,7 @@ class Feeds extends Handler_Protected {
 				if ($feed >= 0) {
 
 					if ($feed > 0) {
-						$children = Feeds::getChildCategories($feed, $owner_uid);
+						$children = self::getChildCategories($feed, $owner_uid);
 						array_push($children, $feed);
 						$children = array_map("intval", $children);
 
@@ -1004,8 +990,6 @@ class Feeds extends Handler_Protected {
 
 			}
 
-			CCache::update($feed, $owner_uid, $cat_view);
-
 		} else { // tag
 			$sth = $pdo->prepare("UPDATE ttrss_user_entries
 				SET unread = false, last_read = NOW() WHERE ref_id IN
@@ -1037,7 +1021,7 @@ class Feeds extends Handler_Protected {
 		$match_part = "";
 
 		if ($is_cat) {
-			return Feeds::getCategoryUnread($n_feed, $owner_uid);
+			return self::getCategoryUnread($n_feed, $owner_uid);
 		} else if ($n_feed == -6) {
 			return 0;
 		} else if ($feed != "0" && $n_feed == 0) {
@@ -1083,7 +1067,7 @@ class Feeds extends Handler_Protected {
 
 			$label_id = Labels::feed_to_label_id($feed);
 
-			return Feeds::getLabelUnread($label_id, $owner_uid);
+			return self::getLabelUnread($label_id, $owner_uid);
 		}
 
 		if ($match_part) {
@@ -1140,11 +1124,11 @@ class Feeds extends Handler_Protected {
 
 		$pdo = Db::pdo();
 
-		$url = Feeds::fix_url($url);
+		$url = UrlHelper::validate($url);
 
-		if (!$url || !Feeds::validate_feed_url($url)) return array("code" => 2);
+		if (!$url) return array("code" => 2);
 
-		$contents = @fetch_file_contents($url, false, $auth_login, $auth_pass);
+		$contents = @UrlHelper::fetch($url, false, $auth_login, $auth_pass);
 
 		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_SUBSCRIBE_FEED) as $plugin) {
 			$contents = $plugin->hook_subscribe_feed($contents, $url, $auth_login, $auth_pass);
@@ -1158,8 +1142,8 @@ class Feeds extends Handler_Protected {
 			return array("code" => 5, "message" => $fetch_last_error);
 		}
 
-		if (mb_strpos($fetch_last_content_type, "html") !== FALSE && Feeds::is_html($contents)) {
-			$feedUrls = Feeds::get_feeds_from_html($url, $contents);
+		if (mb_strpos($fetch_last_content_type, "html") !== false && self::is_html($contents)) {
+			$feedUrls = self::get_feeds_from_html($url, $contents);
 
 			if (count($feedUrls) == 0) {
 				return array("code" => 3);
@@ -1250,7 +1234,7 @@ class Feeds extends Handler_Protected {
 	    $pdo = Db::pdo();
 
 		if ($cat) {
-			return Feeds::getCategoryTitle($id);
+			return self::getCategoryTitle($id);
 		} else if ($id == -1) {
 			return __("Starred articles");
 		} else if ($id == -2) {
@@ -1292,6 +1276,30 @@ class Feeds extends Handler_Protected {
 		}
 	}
 
+	// only real cats
+	static function getCategoryMarked($cat, $owner_uid = false) {
+
+		if (!$owner_uid) $owner_uid = $_SESSION["uid"];
+
+		$pdo = Db::pdo();
+
+		if ($cat >= 0) {
+
+			$sth = $pdo->prepare("SELECT SUM(CASE WHEN marked THEN 1 ELSE 0 END) AS marked
+				FROM ttrss_user_entries
+				WHERE feed_id IN (SELECT id FROM ttrss_feeds
+                    WHERE (cat_id = :cat OR (:cat IS NULL AND cat_id IS NULL))
+					AND owner_uid = :uid)
+				AND owner_uid = :uid");
+			$sth->execute(["cat" => $cat ? $cat : null, "uid" => $owner_uid]);
+			$row = $sth->fetch();
+
+			return $row["marked"];
+		} else {
+			return 0;
+		}
+	}
+
 	static function getCategoryUnread($cat, $owner_uid = false) {
 
 		if (!$owner_uid) $owner_uid = $_SESSION["uid"];
@@ -1300,46 +1308,25 @@ class Feeds extends Handler_Protected {
 
 		if ($cat >= 0) {
 
-		    if (!$cat) $cat = null;
-
-			$sth = $pdo->prepare("SELECT id FROM ttrss_feeds
-                    WHERE (cat_id = :cat OR (:cat IS NULL AND cat_id IS NULL))
-					AND owner_uid = :uid");
-
-			$sth->execute([":cat" => $cat, ":uid" => $owner_uid]);
-
-			$cat_feeds = array();
-			while ($line = $sth->fetch()) {
-				array_push($cat_feeds, "feed_id = " . (int)$line["id"]);
-			}
-
-			if (count($cat_feeds) == 0) return 0;
-
-			$match_part = implode(" OR ", $cat_feeds);
-
-			$sth = $pdo->prepare("SELECT COUNT(int_id) AS unread
+			$sth = $pdo->prepare("SELECT SUM(CASE WHEN unread THEN 1 ELSE 0 END) AS unread
 				FROM ttrss_user_entries
-				WHERE	unread = true AND ($match_part)
-				AND owner_uid = ?");
-			$sth->execute([$owner_uid]);
+				WHERE feed_id IN (SELECT id FROM ttrss_feeds
+                    WHERE (cat_id = :cat OR (:cat IS NULL AND cat_id IS NULL))
+					AND owner_uid = :uid)
+				AND owner_uid = :uid");
+			$sth->execute(["cat" => $cat ? $cat : null, "uid" => $owner_uid]);
+			$row = $sth->fetch();
 
-			$unread = 0;
+			return $row["unread"];
 
-			# this needs to be rewritten
-			while ($line = $sth->fetch()) {
-				$unread += $line["unread"];
-			}
-
-			return $unread;
 		} else if ($cat == -1) {
-			return getFeedUnread(-1) + getFeedUnread(-2) + getFeedUnread(-3) + getFeedUnread(0);
+			return 0;
 		} else if ($cat == -2) {
 
-			$sth = $pdo->prepare("SELECT COUNT(unread) AS unread FROM
-					ttrss_user_entries, ttrss_user_labels2
-				WHERE article_id = ref_id AND unread = true
-					AND ttrss_user_entries.owner_uid = ?");
-			$sth->execute([$owner_uid]);
+			$sth = $pdo->prepare("SELECT COUNT(DISTINCT article_id) AS unread
+				FROM ttrss_user_entries ue, ttrss_user_labels2 l
+				WHERE article_id = ref_id AND unread IS true AND ue.owner_uid = :uid");
+			$sth->execute(["uid" => $owner_uid]);
             $row = $sth->fetch();
 
 			return $row["unread"];
@@ -1359,8 +1346,8 @@ class Feeds extends Handler_Protected {
 		$unread = 0;
 
 		while ($line = $sth->fetch()) {
-			$unread += Feeds::getCategoryUnread($line["id"], $owner_uid);
-			$unread += Feeds::getCategoryChildrenUnread($line["id"], $owner_uid);
+			$unread += self::getCategoryUnread($line["id"], $owner_uid);
+			$unread += self::getCategoryChildrenUnread($line["id"], $owner_uid);
 		}
 
 		return $unread;
@@ -1372,12 +1359,14 @@ class Feeds extends Handler_Protected {
 
 		$pdo = Db::pdo();
 
-		$sth = $pdo->prepare("SELECT SUM(value) AS c_id FROM ttrss_counters_cache
-			WHERE owner_uid = ? AND feed_id > 0");
+		$sth = $pdo->prepare("SELECT SUM(CASE WHEN unread THEN 1 ELSE 0 END) AS count
+			FROM ttrss_user_entries ue
+			WHERE ue.owner_uid = ?");
+
 		$sth->execute([$user_id]);
 		$row = $sth->fetch();
 
-		return $row["c_id"];
+		return $row["count"];
 	}
 
 	static function getCategoryTitle($cat_id) {
@@ -1461,11 +1450,11 @@ class Feeds extends Handler_Protected {
 
 			// fall back in case of no plugins
 			if (!$search_query_part) {
-				list($search_query_part, $search_words) = Feeds::search_to_sql($search, $search_language);
+				list($search_query_part, $search_words) = self::search_to_sql($search, $search_language);
 			}
 
 			if (DB_TYPE == "pgsql") {
-				$test_sth = $pdo->prepare("select $search_query_part 
+				$test_sth = $pdo->prepare("select $search_query_part
 					FROM ttrss_entries, ttrss_user_entries WHERE id = ref_id limit 1");
 
 				try {
@@ -1499,7 +1488,7 @@ class Feeds extends Handler_Protected {
 				$unread = getFeedUnread($feed, $cat_view);
 
 				if ($cat_view && $feed > 0 && $include_children)
-					$unread += Feeds::getCategoryChildrenUnread($feed);
+					$unread += self::getCategoryChildrenUnread($feed);
 
 				if ($unread > 0) {
 					$view_query_part = " unread = true AND ";
@@ -1543,7 +1532,7 @@ class Feeds extends Handler_Protected {
 				if ($feed > 0) {
 					if ($include_children) {
 						# sub-cats
-						$subcats = Feeds::getChildCategories($feed, $owner_uid);
+						$subcats = self::getChildCategories($feed, $owner_uid);
 						array_push($subcats, $feed);
 						$subcats = array_map("intval", $subcats);
 
@@ -1662,7 +1651,7 @@ class Feeds extends Handler_Protected {
 			$feed_title = T_sprintf("Search results: %s", $search);
 		} else {
 			if ($cat_view) {
-				$feed_title = Feeds::getCategoryTitle($feed);
+				$feed_title = self::getCategoryTitle($feed);
 			} else {
 				if (is_numeric($feed) && $feed > 0) {
 					$ssth = $pdo->prepare("SELECT title,site_url,last_error,last_updated
@@ -1675,7 +1664,7 @@ class Feeds extends Handler_Protected {
 					$last_error = $row["last_error"];
 					$last_updated = $row["last_updated"];
 				} else {
-					$feed_title = Feeds::getFeedTitle($feed);
+					$feed_title = self::getFeedTitle($feed);
 				}
 			}
 		}
@@ -1699,7 +1688,7 @@ class Feeds extends Handler_Protected {
 			// proper override_order applied above
 			if ($vfeed_query_part && !$ignore_vfeed_group && get_pref('VFEED_GROUP_BY_FEED', $owner_uid)) {
 
-				if (!(in_array($feed, Feeds::NEVER_GROUP_BY_DATE) && !$cat_view)) {
+				if (!(in_array($feed, self::NEVER_GROUP_BY_DATE) && !$cat_view)) {
 					$yyiw_desc = $order_by == "date_reverse" ? "" : "desc";
 					$yyiw_order_qpart = "yyiw $yyiw_desc, ";
 				} else {
@@ -1880,7 +1869,7 @@ class Feeds extends Handler_Protected {
 
 		while ($line = $sth->fetch()) {
 			array_push($rv, $line["parent_cat"]);
-			$rv = array_merge($rv, Feeds::getParentCategories($line["parent_cat"], $owner_uid));
+			$rv = array_merge($rv, self::getParentCategories($line["parent_cat"], $owner_uid));
 		}
 
 		return $rv;
@@ -1897,7 +1886,7 @@ class Feeds extends Handler_Protected {
 
 		while ($line = $sth->fetch()) {
 			array_push($rv, $line["id"]);
-			$rv = array_merge($rv, Feeds::getChildCategories($line["id"], $owner_uid));
+			$rv = array_merge($rv, self::getChildCategories($line["id"], $owner_uid));
 		}
 
 		return $rv;
@@ -1935,7 +1924,7 @@ class Feeds extends Handler_Protected {
 	}
 
 	static function get_feeds_from_html($url, $content) {
-		$url     = Feeds::fix_url($url);
+		$url     = UrlHelper::validate($url);
 		$baseUrl = substr($url, 0, strrpos($url, '/') + 1);
 
 		$feedUrls = [];
@@ -1964,56 +1953,6 @@ class Feeds extends Handler_Protected {
 
 	static function is_html($content) {
 		return preg_match("/<html|DOCTYPE html/i", substr($content, 0, 8192)) !== 0;
-	}
-
-	static function validate_feed_url($url) {
-		$parts = parse_url($url);
-
-		return ($parts['scheme'] == 'http' || $parts['scheme'] == 'feed' || $parts['scheme'] == 'https');
-	}
-
-	/**
-	 * Fixes incomplete URLs by prepending "http://".
-	 * Also replaces feed:// with http://, and
-	 * prepends a trailing slash if the url is a domain name only.
-	 *
-	 * @param string $url Possibly incomplete URL
-	 *
-	 * @return string Fixed URL.
-	 */
-	static function fix_url($url) {
-
-		// support schema-less urls
-		if (strpos($url, '//') === 0) {
-			$url = 'https:' . $url;
-		}
-
-		if (strpos($url, '://') === false) {
-			$url = 'http://' . $url;
-		} else if (substr($url, 0, 5) == 'feed:') {
-			$url = 'http:' . substr($url, 5);
-		}
-
-		//prepend slash if the URL has no slash in it
-		// "http://www.example" -> "http://www.example/"
-		if (strpos($url, '/', strpos($url, ':') + 3) === false) {
-			$url .= '/';
-		}
-
-		//convert IDNA hostname to punycode if possible
-		if (function_exists("idn_to_ascii")) {
-			$parts = parse_url($url);
-			if (mb_detect_encoding($parts['host']) != 'ASCII')
-			{
-				$parts['host'] = idn_to_ascii($parts['host']);
-				$url = build_url($parts);
-			}
-		}
-
-		if ($url != "http:///")
-			return $url;
-		else
-			return '';
 	}
 
 	static function add_feed_category($feed_cat, $parent_cat_id = false, $order_id = 0) {
@@ -2093,7 +2032,7 @@ class Feeds extends Handler_Protected {
 	 */
 	static function purge_feed($feed_id, $purge_interval) {
 
-		if (!$purge_interval) $purge_interval = Feeds::feed_purge_interval($feed_id);
+		if (!$purge_interval) $purge_interval = self::feed_purge_interval($feed_id);
 
 		$pdo = Db::pdo();
 
@@ -2107,9 +2046,6 @@ class Feeds extends Handler_Protected {
 		}
 
 		if ($purge_interval == -1 || !$purge_interval) {
-			if ($owner_uid) {
-				CCache::update($feed_id, $owner_uid);
-			}
 			return;
 		}
 
@@ -2154,8 +2090,6 @@ class Feeds extends Handler_Protected {
 
 		$rows = $sth->rowCount();
 
-		CCache::update($feed_id, $owner_uid);
-
 		Debug::log("Purged feed $feed_id ($purge_interval): deleted $rows articles");
 
 		return $rows;
@@ -2163,7 +2097,7 @@ class Feeds extends Handler_Protected {
 
 	static function feed_purge_interval($feed_id) {
 
-		$pdo = DB::pdo();
+		$pdo = Db::pdo();
 
 		$sth = $pdo->prepare("SELECT purge_interval, owner_uid FROM ttrss_feeds
 			WHERE id = ?");
@@ -2269,6 +2203,24 @@ class Feeds extends Handler_Protected {
 						if (!$not) array_push($search_words, $k);
 					}
 					break;
+				case "label":
+					if ($commandpair[1]) {
+						$label_id = Labels::find_id($commandpair[1], $_SESSION["uid"]);
+
+						if ($label_id) {
+							array_push($query_keywords, "($not
+								(ttrss_entries.id IN (
+									SELECT article_id FROM ttrss_user_labels2 WHERE
+										label_id = ".$pdo->quote($label_id).")))");
+						} else {
+							array_push($query_keywords, "(false)");
+						}
+					} else {
+						array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
+								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
+						if (!$not) array_push($search_words, $k);
+					}
+					break;
 				case "unread":
 					if ($commandpair[1]) {
 						if ($commandpair[1] == "true")
@@ -2325,9 +2277,38 @@ class Feeds extends Handler_Protected {
 
 		}
 
-		$search_query_part = implode("AND", $query_keywords);
+		if (count($query_keywords) > 0)
+			$search_query_part = implode("AND", $query_keywords);
+		else
+			$search_query_part = "false";
 
 		return array($search_query_part, $search_words);
+	}
+
+	static function order_to_override_query($order) {
+		$query = "";
+		$skip_first_id = false;
+
+		foreach (PluginHost::getInstance()->get_hooks(PluginHost::HOOK_HEADLINES_CUSTOM_SORT_OVERRIDE) as $p) {
+			list ($query, $skip_first_id) = $p->hook_headlines_custom_sort_override($order);
+
+			if ($query)	return [$query, $skip_first_id];
+		}
+
+		switch ($order) {
+			case "title":
+				$query = "ttrss_entries.title, date_entered, updated";
+				break;
+			case "date_reverse":
+				$query = "updated";
+				$skip_first_id = true;
+				break;
+			case "feed_dates":
+				$query = "updated DESC";
+				break;
+		}
+
+		return [$query, $skip_first_id];
 	}
 }
 

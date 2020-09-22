@@ -38,12 +38,22 @@ class Af_Readability extends Plugin {
 		$host->add_hook($host::HOOK_PREFS_TAB, $this);
 		$host->add_hook($host::HOOK_PREFS_EDIT_FEED, $this);
 		$host->add_hook($host::HOOK_PREFS_SAVE_FEED, $this);
+		$host->add_hook($host::HOOK_ARTICLE_BUTTON, $this);
 
 		// Note: we have to install the hook even if disabled because init() is being run before plugin data has loaded
 		// so we can't check for our storage-set options here
 		$host->add_hook($host::HOOK_GET_FULL_TEXT, $this);
 
 		$host->add_filter_action($this, "action_inline", __("Inline content"));
+	}
+
+	function get_js() {
+		return file_get_contents(__DIR__ . "/init.js");
+	}
+
+	function hook_article_button($line) {
+		return "<i class='material-icons' onclick=\"Plugins.Af_Readability.embed(".$line["id"].")\"
+			style='cursor : pointer' title='".__('Toggle full article text')."'>description</i>";
 	}
 
 	function hook_prefs_tab($args) {
@@ -123,7 +133,7 @@ class Af_Readability extends Plugin {
 		if (!is_array($enabled_feeds)) $enabled_feeds = array();
 
 		$key = array_search($feed_id, $enabled_feeds);
-		$checked = $key !== FALSE ? "checked" : "";
+		$checked = $key !== false ? "checked" : "";
 
 		print "<fieldset>";
 
@@ -143,11 +153,11 @@ class Af_Readability extends Plugin {
 		$key = array_search($feed_id, $enabled_feeds);
 
 		if ($enable) {
-			if ($key === FALSE) {
+			if ($key === false) {
 				array_push($enabled_feeds, $feed_id);
 			}
 		} else {
-			if ($key !== FALSE) {
+			if ($key !== false) {
 				unset($enabled_feeds[$key]);
 			}
 		}
@@ -166,7 +176,7 @@ class Af_Readability extends Plugin {
 
 		global $fetch_effective_url;
 
-		$tmp = fetch_file_contents([
+		$tmp = UrlHelper::fetch([
 			"url" => $url,
 			"http_accept" => "text/*",
 			"type" => "text/html"]);
@@ -225,7 +235,7 @@ class Af_Readability extends Plugin {
 		$extracted_content = $this->extract_content($article["link"]);
 
 		# let's see if there's anything of value in there
-		$content_test = trim(strip_tags(sanitize($extracted_content)));
+		$content_test = trim(strip_tags(Sanitizer::sanitize($extracted_content)));
 
 		if ($content_test) {
 			$article["content"] = $extracted_content;
@@ -240,7 +250,7 @@ class Af_Readability extends Plugin {
 		if (!is_array($enabled_feeds)) return $article;
 
 		$key = array_search($article["feed"]["id"], $enabled_feeds);
-		if ($key === FALSE) return $article;
+		if ($key === false) return $article;
 
 		return $this->process_article($article);
 
@@ -254,7 +264,7 @@ class Af_Readability extends Plugin {
 			$extracted_content = $this->extract_content($link);
 
 			# let's see if there's anything of value in there
-			$content_test = trim(strip_tags(sanitize($extracted_content)));
+			$content_test = trim(strip_tags(Sanitizer::sanitize($extracted_content)));
 
 			if ($content_test) {
 				return $extracted_content;
@@ -282,6 +292,21 @@ class Af_Readability extends Plugin {
 		}
 
 		return $tmp;
+	}
+
+	function embed() {
+		$article_id = (int) $_REQUEST["param"];
+
+		$sth = $this->pdo->prepare("SELECT link FROM ttrss_entries WHERE id = ?");
+		$sth->execute([$article_id]);
+
+		$ret = [];
+
+		if ($row = $sth->fetch()) {
+			$ret["content"] = Sanitizer::sanitize($this->extract_content($row["link"]));
+		}
+
+		print json_encode($ret);
 	}
 
 }

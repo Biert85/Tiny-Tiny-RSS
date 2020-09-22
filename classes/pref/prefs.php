@@ -8,7 +8,7 @@ class Pref_Prefs extends Handler_Protected {
 	private $profile_blacklist = [];
 
 	function csrf_ignore($method) {
-		$csrf_ignored = array("index", "updateself", "customizecss", "editprefprofiles");
+		$csrf_ignored = array("index", "updateself", "customizecss", "editprefprofiles", "otpqrcode");
 
 		return array_search($method, $csrf_ignored) !== false;
 	}
@@ -125,7 +125,13 @@ class Pref_Prefs extends Handler_Protected {
 
 		$old_pw = clean($_POST["old_password"]);
 		$new_pw = clean($_POST["new_password"]);
+		$new_unclean_pw = $_POST["new_password"];
 		$con_pw = clean($_POST["confirm_password"]);
+
+		if ($new_unclean_pw != $new_pw) {
+			print "ERROR: ".format_error("New password contains disallowed characters.");
+			return;
+		}
 
 		if ($old_pw == $new_pw) {
 			print "ERROR: ".format_error("New password must be different from the old one.");
@@ -213,11 +219,9 @@ class Pref_Prefs extends Handler_Protected {
 			if ($old_email != $email) {
 				$mailer = new Mailer();
 
-				require_once "lib/MiniTemplator.class.php";
+				$tpl = new Templator();
 
-				$tpl = new MiniTemplator;
-
-				$tpl->readTemplateFromFile("templates/mail_change_template.txt");
+				$tpl->readTemplateFromFile("mail_change_template.txt");
 
 				$tpl->setVariable('LOGIN', $row["login"]);
 				$tpl->setVariable('NEWMAIL', $email);
@@ -253,7 +257,7 @@ class Pref_Prefs extends Handler_Protected {
 				AND owner_uid = :uid");
 		$sth->execute([":profile" => $_SESSION['profile'], ":uid" => $_SESSION['uid']]);
 
-		initialize_user_prefs($_SESSION["uid"], $_SESSION["profile"]);
+		$this->initialize_user_prefs($_SESSION["uid"], $_SESSION["profile"]);
 
 		echo __("Your preferences are now set to default values.");
 	}
@@ -327,13 +331,14 @@ class Pref_Prefs extends Handler_Protected {
 		print "</form>";
 
 		print "</div>"; # content pane
-		print "<div dojoType='dijit.layout.ContentPane' title=\"".__('Password')."\">";
 
 		if ($_SESSION["auth_module"]) {
 			$authenticator = PluginHost::getInstance()->get_plugin($_SESSION["auth_module"]);
 		} else {
 			$authenticator = false;
 		}
+
+		print "<div dojoType='dijit.layout.ContentPane' title=\"" . __('Password') . "\">";
 
 		if ($authenticator && method_exists($authenticator, "change_password")) {
 
@@ -375,18 +380,18 @@ class Pref_Prefs extends Handler_Protected {
 			}
 
 			print "<fieldset>";
-			print "<label>".__("Old password:")."</label>";
+			print "<label>" . __("Old password:") . "</label>";
 			print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1' name='old_password'>";
 			print "</fieldset>";
 
 			print "<fieldset>";
-			print "<label>".__("New password:")."</label>";
-			print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1' name='new_password'>";
+			print "<label>" . __("New password:") . "</label>";
+			print "<input dojoType='dijit.form.ValidationTextBox' type='password' regexp='^[^<>]+' required='1' name='new_password'>";
 			print "</fieldset>";
 
 			print "<fieldset>";
-			print "<label>".__("Confirm password:")."</label>";
-			print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1' name='confirm_password'>";
+			print "<label>" . __("Confirm password:") . "</label>";
+			print "<input dojoType='dijit.form.ValidationTextBox' type='password' regexp='^[^<>]+' required='1' name='confirm_password'>";
 			print "</fieldset>";
 
 			print_hidden("op", "pref-prefs");
@@ -394,151 +399,155 @@ class Pref_Prefs extends Handler_Protected {
 
 			print "<hr/>";
 
-			print "<button dojoType='dijit.form.Button' type='submit' class='alt-primary'>".
-				__("Change password")."</button>";
+			print "<button dojoType='dijit.form.Button' type='submit' class='alt-primary'>" .
+				__("Change password") . "</button>";
 
 			print "</form>";
 
-			print "</div>"; # content pane
+		} else {
+			print_notice(T_sprintf("Authentication module used for this session (<b>%s</b>) does not provide an ability to set passwords.",
+				$_SESSION["auth_module"]));
+		}
 
-			if ($_SESSION["auth_module"] == "auth_internal") {
+		print "</div>"; # content pane
 
-				print "<div dojoType='dijit.layout.ContentPane' title=\"" . __('App passwords') . "\">";
+		print "<div dojoType='dijit.layout.ContentPane' title=\"" . __('App passwords') . "\">";
 
-				print_notice("You can create separate passwords for API clients. Using one is required if you enable OTP.");
+		print_notice("You can create separate passwords for API clients. Using one is required if you enable OTP.");
 
-				print "<div id='app_passwords_holder'>";
-				$this->appPasswordList();
-				print "</div>";
+		print "<div id='app_passwords_holder'>";
+		$this->appPasswordList();
+		print "</div>";
 
-				print "<hr>";
+		print "<hr>";
 
-				print "<button style='float : left' class='alt-primary' dojoType='dijit.form.Button'
-					onclick=\"Helpers.AppPasswords.generate()\">" .
-					__('Generate new password') . "</button> ";
+		print "<button style='float : left' class='alt-primary' dojoType='dijit.form.Button'
+			onclick=\"Helpers.AppPasswords.generate()\">" .
+			__('Generate new password') . "</button> ";
 
-				print "<button style='float : left' class='alt-danger' dojoType='dijit.form.Button'
-					onclick=\"Helpers.AppPasswords.removeSelected()\">" .
-					__('Remove selected passwords') . "</button>";
+		print "<button style='float : left' class='alt-danger' dojoType='dijit.form.Button'
+			onclick=\"Helpers.AppPasswords.removeSelected()\">" .
+			__('Remove selected passwords') . "</button>";
 
-				print "</div>"; # content pane
-			}
+		print "</div>"; # content pane
 
-			print "<div dojoType='dijit.layout.ContentPane' title=\"".__('One time passwords / Authenticator')."\">";
+		print "<div dojoType='dijit.layout.ContentPane' title=\"".__('One time passwords / Authenticator')."\">";
 
-			if ($_SESSION["auth_module"] == "auth_internal") {
+		if ($_SESSION["auth_module"] == "auth_internal") {
 
-				if ($otp_enabled) {
+			if ($otp_enabled) {
 
-					print_warning("One time passwords are currently enabled. Enter your current password below to disable.");
+				print_warning("One time passwords are currently enabled. Enter your current password below to disable.");
 
-					print "<form dojoType='dijit.form.Form'>";
+				print "<form dojoType='dijit.form.Form'>";
 
-					print "<script type='dojo/method' event='onSubmit' args='evt'>
-					evt.preventDefault();
-					if (this.validate()) {
-						Notify.progress('Disabling OTP', true);
+				print "<script type='dojo/method' event='onSubmit' args='evt'>
+				evt.preventDefault();
+				if (this.validate()) {
+					Notify.progress('Disabling OTP', true);
 
-						new Ajax.Request('backend.php', {
-							parameters: dojo.objectToQuery(this.getValues()),
-							onComplete: function(transport) {
-								Notify.close();
-								if (transport.responseText.indexOf('ERROR: ') == 0) {
-									Notify.error(transport.responseText.replace('ERROR: ', ''));
-								} else {
-									window.location.reload();
-								}
-						}});
-						this.reset();
-					}
-					</script>";
+					new Ajax.Request('backend.php', {
+						parameters: dojo.objectToQuery(this.getValues()),
+						onComplete: function(transport) {
+							Notify.close();
+							if (transport.responseText.indexOf('ERROR: ') == 0) {
+								Notify.error(transport.responseText.replace('ERROR: ', ''));
+							} else {
+								window.location.reload();
+							}
+					}});
+					this.reset();
+				}
+				</script>";
 
-					print "<fieldset>";
-					print "<label>".__("Your password:")."</label>";
-					print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1' name='password'>";
-					print "</fieldset>";
+				print "<fieldset>";
+				print "<label>".__("Your password:")."</label>";
+				print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1' name='password'>";
+				print "</fieldset>";
 
-					print_hidden("op", "pref-prefs");
-					print_hidden("method", "otpdisable");
+				print_hidden("op", "pref-prefs");
+				print_hidden("method", "otpdisable");
 
-					print "<hr/>";
+				print "<hr/>";
 
-					print "<button dojoType='dijit.form.Button' type='submit'>".
-						__("Disable OTP")."</button>";
+				print "<button dojoType='dijit.form.Button' type='submit'>".
+					__("Disable OTP")."</button>";
 
-					print "</form>";
+				print "</form>";
 
+			} else {
+
+				print_warning("You will need a compatible Authenticator to use this. Changing your password would automatically disable OTP.");
+				print_notice("You will need to generate app passwords for the API clients if you enable OTP.");
+
+				if (function_exists("imagecreatefromstring")) {
+					print "<h3>" . __("Scan the following code by the Authenticator application or copy the key manually") . "</h3>";
+
+					$csrf_token_hash = sha1($_SESSION["csrf_token"]);
+					print "<img alt='otp qr-code' src='backend.php?op=pref-prefs&method=otpqrcode&csrf_token_hash=$csrf_token_hash'>";
 				} else {
+					print_error("PHP GD functions are required to generate QR codes.");
+					print "<h3>" . __("Use the following OTP key with a compatible Authenticator application") . "</h3>";
+				}
 
-					print_warning("You will need a compatible Authenticator to use this. Changing your password would automatically disable OTP.");
-					print_notice("You will need to generate app passwords for the API clients if you enable OTP.");
+				print "<form dojoType='dijit.form.Form' id='changeOtpForm'>";
 
-					if (function_exists("imagecreatefromstring")) {
-						print "<h3>" . __("Scan the following code by the Authenticator application or copy the key manually") . "</h3>";
+				$otp_secret = $this->otpsecret();
 
-						$csrf_token = $_SESSION["csrf_token"];
-						print "<img alt='otp qr-code' src='backend.php?op=pref-prefs&method=otpqrcode&csrf_token=$csrf_token'>";
-					} else {
-						print_error("PHP GD functions are required to generate QR codes.");
-						print "<h3>" . __("Use the following OTP key with a compatible Authenticator application") . "</h3>";
-					}
+				print "<fieldset>";
+				print "<label>".__("OTP Key:")."</label>";
+				print "<input dojoType='dijit.form.ValidationTextBox' disabled='disabled' value='$otp_secret' size='32'>";
+				print "</fieldset>";
 
-					print "<form dojoType='dijit.form.Form' id='changeOtpForm'>";
+				print_hidden("op", "pref-prefs");
+				print_hidden("method", "otpenable");
 
-					$otp_secret = $this->otpsecret();
+				print "<script type='dojo/method' event='onSubmit' args='evt'>
+				evt.preventDefault();
+				if (this.validate()) {
+					Notify.progress('Saving data...', true);
 
-					print "<fieldset>";
-					print "<label>".__("OTP Key:")."</label>";
-					print "<input dojoType='dijit.form.ValidationTextBox' disabled='disabled' value='$otp_secret' size='32'>";
-					print "</fieldset>";
-
-					print_hidden("op", "pref-prefs");
-					print_hidden("method", "otpenable");
-
-					print "<script type='dojo/method' event='onSubmit' args='evt'>
-					evt.preventDefault();
-					if (this.validate()) {
-						Notify.progress('Saving data...', true);
-
-						new Ajax.Request('backend.php', {
-							parameters: dojo.objectToQuery(this.getValues()),
-							onComplete: function(transport) {
-								Notify.close();
-								if (transport.responseText.indexOf('ERROR:') == 0) {
-									Notify.error(transport.responseText.replace('ERROR:', ''));
-								} else {
-									window.location.reload();
-								}
-						} });
-
-					}
-					</script>";
-
-					print "<fieldset>";
-					print "<label>".__("Your password:")."</label>";
-					print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1'
-						name='password'>";
-					print "</fieldset>";
-
-					print "<fieldset>";
-					print "<label>".__("One time password:")."</label>";
-					print "<input dojoType='dijit.form.ValidationTextBox' autocomplete='off'
-						required='1' name='otp'>";
-					print "</fieldset>";
-
-					print "<hr/>";
-					print "<button dojoType='dijit.form.Button' type='submit' class='alt-primary'>".
-						__("Enable OTP")."</button>";
-
-					print "</form>";
+					new Ajax.Request('backend.php', {
+						parameters: dojo.objectToQuery(this.getValues()),
+						onComplete: function(transport) {
+							Notify.close();
+							if (transport.responseText.indexOf('ERROR:') == 0) {
+								Notify.error(transport.responseText.replace('ERROR:', ''));
+							} else {
+								window.location.reload();
+							}
+					} });
 
 				}
+				</script>";
+
+				print "<fieldset>";
+				print "<label>".__("Your password:")."</label>";
+				print "<input dojoType='dijit.form.ValidationTextBox' type='password' required='1'
+					name='password'>";
+				print "</fieldset>";
+
+				print "<fieldset>";
+				print "<label>".__("One time password:")."</label>";
+				print "<input dojoType='dijit.form.ValidationTextBox' autocomplete='off'
+					required='1' name='otp'>";
+				print "</fieldset>";
+
+				print "<hr/>";
+				print "<button dojoType='dijit.form.Button' type='submit' class='alt-primary'>".
+					__("Enable OTP")."</button>";
+
+				print "</form>";
+
 			}
 
-			print "</div>"; # content pane
-			print "</div>"; # tab container
-
+		} else {
+			print_notice("OTP is only available when using <b>auth_internal</b> authentication module.");
 		}
+
+		print "</div>"; # content pane
+
+		print "</div>"; # tab container
 
 		PluginHost::getInstance()->run_hooks(PluginHost::HOOK_PREFS_TAB_SECTION,
 			"hook_prefs_tab_section", "prefPrefsAuth");
@@ -581,9 +590,9 @@ class Pref_Prefs extends Handler_Protected {
 		if ($profile) {
 			print_notice(__("Some preferences are only available in default profile."));
 
-			initialize_user_prefs($_SESSION["uid"], $profile);
+			$this->initialize_user_prefs($_SESSION["uid"], $profile);
 		} else {
-			initialize_user_prefs($_SESSION["uid"]);
+			$this->initialize_user_prefs($_SESSION["uid"]);
 		}
 
 		$prefs_available = [];
@@ -669,12 +678,12 @@ class Pref_Prefs extends Handler_Protected {
 						$themes = array_filter($themes, "theme_exists");
 						asort($themes);
 
-						if (!theme_exists($value)) $value = "default.php";
+						if (!theme_exists($value)) $value = "";
 
 						print "<select name='$pref_name' id='$pref_name' dojoType='fox.form.Select'>";
 
-						$issel = $value == "default.php" ? "selected='selected'" : "";
-						print "<option $issel value='default.php'>".__("default")."</option>";
+						$issel = $value == "" ? "selected='selected'" : "";
+						print "<option $issel value=''>".__("default")."</option>";
 
 						foreach ($themes as $theme) {
 							$issel = $value == $theme ? "selected='selected'" : "";
@@ -849,6 +858,10 @@ class Pref_Prefs extends Handler_Protected {
 			print_warning("Your PHP configuration has open_basedir restrictions enabled. Some plugins relying on CURL for functionality may not work correctly.");
 		}
 
+		if ($_SESSION["safe_mode"]) {
+			print_error("You have logged in using safe mode, no user plugins will be actually enabled until you login again.");
+		}
+
 		$feed_handler_whitelist = [ "Af_Comics" ];
 
 		$feed_handlers = array_merge(
@@ -857,7 +870,7 @@ class Pref_Prefs extends Handler_Protected {
 			PluginHost::getInstance()->get_hooks(PluginHost::HOOK_FETCH_FEED));
 
 		$feed_handlers = array_filter($feed_handlers, function($plugin) use ($feed_handler_whitelist) {
-			return in_array(get_class($plugin), $feed_handler_whitelist) === FALSE; });
+			return in_array(get_class($plugin), $feed_handler_whitelist) === false; });
 
 		if (count($feed_handlers) > 0) {
 			print_error(
@@ -1001,21 +1014,28 @@ class Pref_Prefs extends Handler_Protected {
 	}
 
 	function otpqrcode() {
-		require_once "lib/phpqrcode/phpqrcode.php";
+		$csrf_token_hash = clean($_REQUEST["csrf_token_hash"]);
 
-		$sth = $this->pdo->prepare("SELECT login
-			FROM ttrss_users
-			WHERE id = ?");
-		$sth->execute([$_SESSION['uid']]);
+		if (sha1($_SESSION["csrf_token"]) === $csrf_token_hash) {
+			require_once "lib/phpqrcode/phpqrcode.php";
 
-		if ($row = $sth->fetch()) {
-			$secret = $this->otpsecret();
-			$login = $row['login'];
+			$sth = $this->pdo->prepare("SELECT login
+				FROM ttrss_users
+				WHERE id = ?");
+			$sth->execute([$_SESSION['uid']]);
 
-			if ($secret) {
-				QRcode::png("otpauth://totp/".urlencode($login).
-					"?secret=$secret&issuer=".urlencode("Tiny Tiny RSS"));
+			if ($row = $sth->fetch()) {
+				$secret = $this->otpsecret();
+				$login = $row['login'];
+
+				if ($secret) {
+					QRcode::png("otpauth://totp/".urlencode($login).
+						"?secret=$secret&issuer=".urlencode("Tiny Tiny RSS"));
+				}
 			}
+		} else {
+			header("Content-Type: text/json");
+			print error_json(6);
 		}
 	}
 
@@ -1082,11 +1102,9 @@ class Pref_Prefs extends Handler_Protected {
 			if ($row = $sth->fetch()) {
 				$mailer = new Mailer();
 
-				require_once "lib/MiniTemplator.class.php";
+				$tpl = new Templator();
 
-				$tpl = new MiniTemplator;
-
-				$tpl->readTemplateFromFile("templates/otp_disabled_template.txt");
+				$tpl->readTemplateFromFile("otp_disabled_template.txt");
 
 				$tpl->setVariable('LOGIN', $row["login"]);
 				$tpl->setVariable('TTRSS_HOST', SELF_URL_PATH);
@@ -1348,4 +1366,57 @@ class Pref_Prefs extends Handler_Protected {
 
 		$this->appPasswordList();
 	}
+
+	static function initialize_user_prefs($uid, $profile = false) {
+
+		if (get_schema_version() < 63) $profile_qpart = "";
+
+		$pdo = Db::pdo();
+		$in_nested_tr = false;
+
+		try {
+			$pdo->beginTransaction();
+		} catch (Exception $e) {
+			$in_nested_tr = true;
+		}
+
+		$sth = $pdo->query("SELECT pref_name,def_value FROM ttrss_prefs");
+
+		if (!is_numeric($profile) || !$profile || get_schema_version() < 63) $profile = null;
+
+		$u_sth = $pdo->prepare("SELECT pref_name
+			FROM ttrss_user_prefs WHERE owner_uid = :uid AND
+				(profile = :profile OR (:profile IS NULL AND profile IS NULL))");
+		$u_sth->execute([':uid' => $uid, ':profile' => $profile]);
+
+		$active_prefs = array();
+
+		while ($line = $u_sth->fetch()) {
+			array_push($active_prefs, $line["pref_name"]);
+		}
+
+		while ($line = $sth->fetch()) {
+			if (array_search($line["pref_name"], $active_prefs) === false) {
+//				print "adding " . $line["pref_name"] . "<br>";
+
+				if (get_schema_version() < 63) {
+					$i_sth = $pdo->prepare("INSERT INTO ttrss_user_prefs
+						(owner_uid,pref_name,value) VALUES
+						(?, ?, ?)");
+					$i_sth->execute([$uid, $line["pref_name"], $line["def_value"]]);
+
+				} else {
+					$i_sth = $pdo->prepare("INSERT INTO ttrss_user_prefs
+						(owner_uid,pref_name,value, profile) VALUES
+						(?, ?, ?, ?)");
+					$i_sth->execute([$uid, $line["pref_name"], $line["def_value"], $profile]);
+				}
+
+			}
+		}
+
+		if (!$in_nested_tr) $pdo->commit();
+
+	}
+
 }

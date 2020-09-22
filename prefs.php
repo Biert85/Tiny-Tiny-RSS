@@ -21,7 +21,7 @@
 
 	if (!init_plugins()) return;
 
-	login_sequence();
+	UserHelper::login_sequence();
 
 	header('Content-Type: text/html; charset=utf-8');
 ?>
@@ -31,7 +31,7 @@
 	<title>Tiny Tiny RSS : <?php echo __("Preferences") ?></title>
     <meta name="viewport" content="initial-scale=1,width=device-width" />
 
-	<?php if ($_SESSION["uid"]) {
+	<?php if ($_SESSION["uid"] && !isset($_REQUEST["ignore-theme"])) {
 		$theme = get_pref("USER_CSS_THEME", false, false);
 		if ($theme && theme_exists("$theme")) {
 			echo stylesheet_tag(get_theme_path($theme), 'theme_css');
@@ -39,7 +39,11 @@
 	}
 	?>
 
-	<?php print_user_stylesheet() ?>
+	<script type="text/javascript">
+		const __csrf_token = "<?php echo $_SESSION["csrf_token"]; ?>";
+	</script>
+
+	<?php UserHelper::print_user_stylesheet() ?>
 
 	<link rel="shortcut icon" type="image/png" href="images/favicon.png"/>
 	<link rel="icon" type="image/png" sizes="72x72" href="images/favicon-72px.png" />
@@ -157,12 +161,13 @@
                 "hook_prefs_tabs", false);
         ?>
         </div>
-    <div id="footer" dojoType="dijit.layout.ContentPane" region="bottom">
-        <a class="text-muted" target="_blank" href="http://tt-rss.org/">
-        Tiny Tiny RSS</a> v<?php echo get_version() ?>
+		<?php $version = get_version($git_commit, $git_timestamp, $last_error); ?>
+		<div id="footer" dojoType="dijit.layout.ContentPane" region="bottom">
+		<a class="text-muted" target="_blank" href="https://tt-rss.org/">Tiny Tiny RSS</a>
+			<span title="<?php echo htmlspecialchars($last_error) ?>">v<?php echo $version ?></span>
         &copy; 2005-<?php echo date('Y') ?>
         <a class="text-muted" target="_blank"
-        href="http://fakecake.org/">Andrew Dolgov</a>
+        href="https://fakecake.org/">Andrew Dolgov</a>
     </div> <!-- footer -->
 </div>
 

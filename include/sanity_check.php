@@ -60,7 +60,7 @@
 				array_push($errors, "Please copy config.php-dist to config.php or run the installer in install/");
 			}
 
-			if (strpos(PLUGINS, "auth_") === FALSE) {
+			if (strpos(PLUGINS, "auth_") === false) {
 				array_push($errors, "Please enable at least one authentication module via PLUGINS constant in config.php");
 			}
 
@@ -108,7 +108,7 @@
 			}
 
 			if (SINGLE_USER_MODE && class_exists("PDO")) {
-			    $pdo = DB::pdo();
+			    $pdo = Db::pdo();
 
 				$res = $pdo->query("SELECT id FROM ttrss_users WHERE id = 1");
 
@@ -210,7 +210,7 @@
 			<head>
 			<title>Startup failed</title>
 				<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-				<link rel="stylesheet" type="text/css" href="css/default.css">
+				<link rel="stylesheet" type="text/css" href="themes/light.css">
 			</head>
 		<body class='sanity_failed claro ttrss_utility'>
 			<div class="content">
@@ -222,8 +222,8 @@
 
 			<?php foreach ($errors as $error) { echo format_error($error); } ?>
 
-			<p>You might want to check tt-rss <a href="http://tt-rss.org/wiki">wiki</a> or the
-				<a href="http://tt-rss.org/forum">forums</a> for more information. Please search the forums before creating new topic
+			<p>You might want to check tt-rss <a href="https://tt-rss.org/wiki.php">wiki</a> or the
+				<a href="https://community.tt-rss.org/">forums</a> for more information. Please search the forums before creating new topic
 				for your question.</p>
 
 		</div>
