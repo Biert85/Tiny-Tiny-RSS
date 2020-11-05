@@ -435,9 +435,8 @@ class RPC extends Handler_Protected {
 				) OR (
 					ttrss_feeds.update_interval > 0
 					AND ttrss_feeds.last_updated < NOW() - CAST((ttrss_feeds.update_interval || ' minutes') AS INTERVAL)
-				) OR ttrss_feeds.last_updated IS NULL
-				OR (
-					ttrss_feeds.update_interval > 0
+				) OR (
+					ttrss_feeds.update_interval >= 0
 					AND (last_updated = '1970-01-01 00:00:00' OR last_updated IS NULL)
 				))";
 		} else {
@@ -447,9 +446,8 @@ class RPC extends Handler_Protected {
 				) OR (
 					ttrss_feeds.update_interval > 0
 					AND ttrss_feeds.last_updated < DATE_SUB(NOW(), INTERVAL ttrss_feeds.update_interval MINUTE)
-				) OR ttrss_feeds.last_updated IS NULL
-				OR (
-					ttrss_feeds.update_interval > 0
+				) OR (
+					ttrss_feeds.update_interval >= 0
 					AND (last_updated = '1970-01-01 00:00:00' OR last_updated IS NULL)
 				))";
 		}
@@ -649,8 +647,6 @@ class RPC extends Handler_Protected {
 		$params["php_platform"] = PHP_OS;
 		$params["php_version"] = PHP_VERSION;
 
-		$params["sanity_checksum"] = sha1(file_get_contents("include/sanity_check.php"));
-
 		$pdo = Db::pdo();
 
 		$sth = $pdo->prepare("SELECT MAX(id) AS mid, COUNT(*) AS nf FROM
@@ -713,7 +709,7 @@ class RPC extends Handler_Protected {
 				$log_interval = "created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)";
 			}
 
-			$sth = $pdo->prepare("SELECT COUNT(id) AS cid FROM ttrss_error_log WHERE $log_interval");
+			$sth = $pdo->prepare("SELECT COUNT(id) AS cid FROM ttrss_error_log WHERE errno != 1024 AND $log_interval");
 			$sth->execute();
 
 			if ($row = $sth->fetch()) {

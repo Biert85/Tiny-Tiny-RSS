@@ -211,7 +211,7 @@ class Feeds extends Handler_Protected {
 		$feed_site_url = $qfh_ret[2];
 		$last_error = $qfh_ret[3];
 		$last_updated = strpos($qfh_ret[4], '1970-') === false ?
-			make_local_datetime($qfh_ret[4], false) : __("Never");
+			TimeHelper::make_local_datetime($qfh_ret[4], false) : __("Never");
 		$highlight_words = $qfh_ret[5];
 		$reply['first_id'] = $qfh_ret[6];
 		$reply['is_vfeed'] = $qfh_ret[7];
@@ -343,12 +343,12 @@ class Feeds extends Handler_Protected {
                     }
                 }
 
-				$line["updated_long"] = make_local_datetime($line["updated"],true);
-				$line["updated"] = make_local_datetime($line["updated"], false, false, false, true);
+				$line["updated_long"] = TimeHelper::make_local_datetime($line["updated"],true);
+				$line["updated"] = TimeHelper::make_local_datetime($line["updated"], false, false, false, true);
 
 
 				$line['imported'] = T_sprintf("Imported at %s",
-					make_local_datetime($line["date_entered"], false));
+				TimeHelper::make_local_datetime($line["date_entered"], false));
 
 				if ($line["tag_cache"])
 					$tags = explode(",", $line["tag_cache"]);
@@ -426,7 +426,7 @@ class Feeds extends Handler_Protected {
 					$sth->execute([$_SESSION['uid']]);
 					$row = $sth->fetch();
 
-					$last_updated = make_local_datetime($row["last_updated"], false);
+					$last_updated = TimeHelper::make_local_datetime($row["last_updated"], false);
 
 					$reply['content'] .= sprintf(__("Feeds last updated at %s"), $last_updated);
 
@@ -580,7 +580,7 @@ class Feeds extends Handler_Protected {
 		$sth->execute([$_SESSION['uid']]);
 		$row = $sth->fetch();
 
-		$last_updated = make_local_datetime($row["last_updated"], false);
+		$last_updated = TimeHelper::make_local_datetime($row["last_updated"], false);
 
 		$reply['headlines']['content'] .= sprintf(__("Feeds last updated at %s"), $last_updated);
 
@@ -851,7 +851,7 @@ class Feeds extends Handler_Protected {
 
 			// fall back in case of no plugins
 			if (!$search_qpart) {
-				list($search_qpart, $search_words) = self::search_to_sql($search[0], $search[1]);
+				list($search_qpart, $search_words) = self::search_to_sql($search[0], $search[1], $owner_uid);
 			}
 		} else {
 			$search_qpart = "true";
@@ -1450,7 +1450,7 @@ class Feeds extends Handler_Protected {
 
 			// fall back in case of no plugins
 			if (!$search_query_part) {
-				list($search_query_part, $search_words) = self::search_to_sql($search, $search_language);
+				list($search_query_part, $search_words) = self::search_to_sql($search, $search_language, $owner_uid);
 			}
 
 			if (DB_TYPE == "pgsql") {
@@ -1930,7 +1930,7 @@ class Feeds extends Handler_Protected {
 		$feedUrls = [];
 
 		$doc = new DOMDocument();
-		if ($doc->loadHTML($content)) {
+		if (@$doc->loadHTML($content)) {
 			$xpath = new DOMXPath($doc);
 			$entries = $xpath->query('/html/head/link[@rel="alternate" and '.
 				'(contains(@type,"rss") or contains(@type,"atom"))]|/html/head/link[@rel="feed"]');
@@ -2117,7 +2117,7 @@ class Feeds extends Handler_Protected {
 		}
 	}
 
-	static function search_to_sql($search, $search_language) {
+	static function search_to_sql($search, $search_language, $owner_uid) {
 
 		$keywords = str_getcsv(trim($search), " ");
 		$query_keywords = array();
@@ -2129,7 +2129,7 @@ class Feeds extends Handler_Protected {
 		if ($search_language)
 			$search_language = $pdo->quote(mb_strtolower($search_language));
 		else
-			$search_language = $pdo->quote("english");
+			$search_language = $pdo->quote(mb_strtolower(get_pref('DEFAULT_SEARCH_LANGUAGE', $owner_uid)));
 
 		foreach ($keywords as $k) {
 			if (strpos($k, "-") === 0) {
@@ -2239,7 +2239,7 @@ class Feeds extends Handler_Protected {
 
 						$user_tz_string = get_pref('USER_TIMEZONE', $_SESSION['uid']);
 						$orig_ts = strtotime(substr($k, 1));
-						$k = date("Y-m-d", convert_timestamp($orig_ts, $user_tz_string, 'UTC'));
+						$k = date("Y-m-d", TimeHelper::convert_timestamp($orig_ts, $user_tz_string, 'UTC'));
 
 						//$k = date("Y-m-d", strtotime(substr($k, 1)));
 

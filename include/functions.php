@@ -1,6 +1,6 @@
 <?php
 	define('EXPECTED_CONFIG_VERSION', 26);
-	define('SCHEMA_VERSION', 139);
+	define('SCHEMA_VERSION', 140);
 
 	define('LABEL_BASE_INDEX', -1024);
 	define('PLUGIN_FEED_BASE_INDEX', -128);
@@ -72,6 +72,9 @@
 	// this is used to not cause excessive load on the origin server on
 	// e.g. feed subscription when all articles are being processes
 	// (not implemented)
+	define_default('DAEMON_UNSUCCESSFUL_DAYS_LIMIT', 30);
+	// automatically disable updates for feeds which failed to
+	// update for this amount of days; 0 disables
 
 	/* tunables end here */
 
@@ -100,6 +103,7 @@
 					"es_ES" => "Español (España)",
 					"es_LA" => "Español",
 					"de_DE" => "Deutsch",
+					"fa"    => "Persian (Farsi)",
 					"fr_FR" => "Français",
 					"hu_HU" => "Magyar (Hungarian)",
 					"it_IT" => "Italiano",
@@ -168,24 +172,44 @@
 	    Debug::log($msg);
 	}
 
+	// @deprecated
+	function getFeedUnread($feed, $is_cat = false) {
+		return Feeds::getFeedArticles($feed, $is_cat, true, $_SESSION["uid"]);
+	}
+
+	// @deprecated
 	function sanitize($str, $force_remove_images = false, $owner = false, $site_url = false, $highlight_words = false, $article_id = false) {
 		return Sanitizer::sanitize($str, $force_remove_images, $owner, $site_url, $highlight_words, $article_id);
 	}
 
+	// @deprecated
 	function fetch_file_contents($params) {
 		return UrlHelper::fetch($params);
 	}
 
+	// @deprecated
 	function rewrite_relative_url($url, $rel_url) {
 		return UrlHelper::rewrite_relative($url, $rel_url);
 	}
 
+	// @deprecated
 	function validate_url($url) {
 		return UrlHelper::validate($url);
 	}
 
+	// @deprecated
 	function authenticate_user($login, $password, $check_only = false, $service = false) {
 		return UserHelper::authenticate($login, $password, $check_only, $service);
+	}
+
+	// @deprecated
+	function smart_date_time($timestamp, $tz_offset = 0, $owner_uid = false, $eta_min = false) {
+		return TimeHelper::smart_date_time($timestamp, $tz_offset, $owner_uid, $eta_min);
+	}
+
+	// @deprecated
+	function make_local_datetime($timestamp, $long, $owner_uid = false, $no_smart_dt = false, $eta_min = false) {
+		return TimeHelper::make_local_datetime($timestamp, $long, $owner_uid, $no_smart_dt, $eta_min);
 	}
 
 	/* end compat shims */
@@ -268,90 +292,6 @@
 			return mb_substr_replace($str, $suffix, $max_len / 2, mb_strlen($str) - $max_len);
 		} else {
 			return $str;
-		}
-	}
-
-	function convert_timestamp($timestamp, $source_tz, $dest_tz) {
-
-		try {
-			$source_tz = new DateTimeZone($source_tz);
-		} catch (Exception $e) {
-			$source_tz = new DateTimeZone('UTC');
-		}
-
-		try {
-			$dest_tz = new DateTimeZone($dest_tz);
-		} catch (Exception $e) {
-			$dest_tz = new DateTimeZone('UTC');
-		}
-
-		$dt = new DateTime(date('Y-m-d H:i:s', $timestamp), $source_tz);
-		return $dt->format('U') + $dest_tz->getOffset($dt);
-	}
-
-	function make_local_datetime($timestamp, $long, $owner_uid = false,
-					$no_smart_dt = false, $eta_min = false) {
-
-		if (!$owner_uid) $owner_uid = $_SESSION['uid'];
-		if (!$timestamp) $timestamp = '1970-01-01 0:00';
-
-		global $utc_tz;
-		global $user_tz;
-
-		if (!$utc_tz) $utc_tz = new DateTimeZone('UTC');
-
-		$timestamp = substr($timestamp, 0, 19);
-
-		# We store date in UTC internally
-		$dt = new DateTime($timestamp, $utc_tz);
-
-		$user_tz_string = get_pref('USER_TIMEZONE', $owner_uid);
-
-		if ($user_tz_string != 'Automatic') {
-
-			try {
-				if (!$user_tz) $user_tz = new DateTimeZone($user_tz_string);
-			} catch (Exception $e) {
-				$user_tz = $utc_tz;
-			}
-
-			$tz_offset = $user_tz->getOffset($dt);
-		} else {
-			$tz_offset = (int) -$_SESSION["clientTzOffset"];
-		}
-
-		$user_timestamp = $dt->format('U') + $tz_offset;
-
-		if (!$no_smart_dt) {
-			return smart_date_time($user_timestamp,
-				$tz_offset, $owner_uid, $eta_min);
-		} else {
-			if ($long)
-				$format = get_pref('LONG_DATE_FORMAT', $owner_uid);
-			else
-				$format = get_pref('SHORT_DATE_FORMAT', $owner_uid);
-
-			return date($format, $user_timestamp);
-		}
-	}
-
-	function smart_date_time($timestamp, $tz_offset = 0, $owner_uid = false, $eta_min = false) {
-		if (!$owner_uid) $owner_uid = $_SESSION['uid'];
-
-		if ($eta_min && time() + $tz_offset - $timestamp < 3600) {
-			return T_sprintf("%d min", date("i", time() + $tz_offset - $timestamp));
-		} else if (date("Y.m.d", $timestamp) == date("Y.m.d", time() + $tz_offset)) {
-			$format = get_pref('SHORT_DATE_FORMAT', $owner_uid);
-			if (strpos((strtolower($format)), "a") === false)
-				return date("G:i", $timestamp);
-			else
-				return date("g:i a", $timestamp);
-		} else if (date("Y", $timestamp) == date("Y", time() + $tz_offset)) {
-			$format = get_pref('SHORT_DATE_FORMAT', $owner_uid);
-			return date($format, $timestamp);
-		} else {
-			$format = get_pref('LONG_DATE_FORMAT', $owner_uid);
-			return date($format, $timestamp);
 		}
 	}
 
@@ -439,10 +379,6 @@
 		} else {
 			return false;
 		}
-	}
-
-	function getFeedUnread($feed, $is_cat = false) {
-		return Feeds::getFeedArticles($feed, $is_cat, true, $_SESSION["uid"]);
 	}
 
 	function checkbox_to_sql_bool($val) {

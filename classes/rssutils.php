@@ -29,7 +29,29 @@ class RSSUtils {
 		$pdo->query("DELETE FROM ttrss_feedbrowser_cache");
 	}
 
-	static function update_daemon_common($limit = DAEMON_FEED_LIMIT) {
+	static function cleanup_feed_icons() {
+		$pdo = Db::pdo();
+		$sth = $pdo->prepare("SELECT id FROM ttrss_feeds WHERE id = ?");
+
+		// check icon files once every CACHE_MAX_DAYS days
+		$icon_files = array_filter(glob(ICONS_DIR . "/*.ico"),
+			function($f) { return filemtime($f) < time() - 86400*CACHE_MAX_DAYS; });
+
+		foreach ($icon_files as $icon) {
+			$feed_id = basename($icon, ".ico");
+
+			$sth->execute([$feed_id]);
+
+			if ($sth->fetch()) {
+				@touch($icon);
+			} else {
+				Debug::log("Removing orphaned feed icon: $icon");
+				unlink($icon);
+			}
+		}
+	}
+
+	static function update_daemon_common($limit = DAEMON_FEED_LIMIT, $options = []) {
 		$schema_version = get_schema_version();
 
 		if ($schema_version != SCHEMA_VERSION) {
@@ -52,37 +74,31 @@ class RSSUtils {
 			$update_limit_qpart = "AND ((
 					ttrss_feeds.update_interval = 0
 					AND ttrss_user_prefs.value != '-1'
-					AND ttrss_feeds.last_updated < NOW() - CAST((ttrss_user_prefs.value || ' minutes') AS INTERVAL)
+					AND last_updated < NOW() - CAST((ttrss_user_prefs.value || ' minutes') AS INTERVAL)
 				) OR (
 					ttrss_feeds.update_interval > 0
-					AND ttrss_feeds.last_updated < NOW() - CAST((ttrss_feeds.update_interval || ' minutes') AS INTERVAL)
-				) OR (ttrss_feeds.last_updated IS NULL
-					AND ttrss_feeds.update_interval > 0
-					AND ttrss_user_prefs.value != '-1')
-				OR (last_updated = '1970-01-01 00:00:00'
-					AND ttrss_feeds.update_interval > 0
+					AND last_updated < NOW() - CAST((ttrss_feeds.update_interval || ' minutes') AS INTERVAL)
+				) OR ((last_updated = '1970-01-01 00:00:00' OR last_updated IS NULL)
+					AND ttrss_feeds.update_interval >= 0
 					AND ttrss_user_prefs.value != '-1'))";
 		} else {
 			$update_limit_qpart = "AND ((
 					ttrss_feeds.update_interval = 0
 					AND ttrss_user_prefs.value != '-1'
-					AND ttrss_feeds.last_updated < DATE_SUB(NOW(), INTERVAL CONVERT(ttrss_user_prefs.value, SIGNED INTEGER) MINUTE)
+					AND last_updated < DATE_SUB(NOW(), INTERVAL CONVERT(ttrss_user_prefs.value, SIGNED INTEGER) MINUTE)
 				) OR (
 					ttrss_feeds.update_interval > 0
-					AND ttrss_feeds.last_updated < DATE_SUB(NOW(), INTERVAL ttrss_feeds.update_interval MINUTE)
-				) OR (ttrss_feeds.last_updated IS NULL
-					AND ttrss_feeds.update_interval > 0
-					AND ttrss_user_prefs.value != '-1')
-				OR (last_updated = '1970-01-01 00:00:00'
-					AND ttrss_feeds.update_interval > 0
+					AND last_updated < DATE_SUB(NOW(), INTERVAL ttrss_feeds.update_interval MINUTE)
+				) OR ((last_updated = '1970-01-01 00:00:00' OR last_updated IS NULL)
+					AND ttrss_feeds.update_interval >= 0
 					AND ttrss_user_prefs.value != '-1'))";
 		}
 
 		// Test if feed is currently being updated by another process.
 		if (DB_TYPE == "pgsql") {
-			$updstart_thresh_qpart = "AND (ttrss_feeds.last_update_started IS NULL OR ttrss_feeds.last_update_started < NOW() - INTERVAL '10 minutes')";
+			$updstart_thresh_qpart = "AND (last_update_started IS NULL OR last_update_started < NOW() - INTERVAL '10 minutes')";
 		} else {
-			$updstart_thresh_qpart = "AND (ttrss_feeds.last_update_started IS NULL OR ttrss_feeds.last_update_started < DATE_SUB(NOW(), INTERVAL 10 MINUTE))";
+			$updstart_thresh_qpart = "AND (last_update_started IS NULL OR last_update_started < DATE_SUB(NOW(), INTERVAL 10 MINUTE))";
 		}
 
 		$query_limit = $limit ? sprintf("LIMIT %d", $limit) : "";
@@ -128,7 +144,11 @@ class RSSUtils {
 		$batch_owners = array();
 
 		// since we have the data cached, we can deal with other feeds with the same url
-		$usth = $pdo->prepare("SELECT DISTINCT ttrss_feeds.id,last_updated,ttrss_feeds.owner_uid
+		$usth = $pdo->prepare("SELECT
+			DISTINCT ttrss_feeds.id,
+				last_updated,
+				ttrss_feeds.owner_uid,
+				ttrss_feeds.title
 			FROM ttrss_feeds, ttrss_users, ttrss_user_prefs WHERE
 				ttrss_user_prefs.owner_uid = ttrss_feeds.owner_uid AND
 				ttrss_users.id = ttrss_user_prefs.owner_uid AND
@@ -143,30 +163,76 @@ class RSSUtils {
 			Debug::log("Base feed: $feed");
 
 			$usth->execute([$feed]);
-			//update_rss_feed($line["id"], true);
 
 			if ($tline = $usth->fetch()) {
-				Debug::log(" => " . $tline["last_updated"] . ", " . $tline["id"] . " " . $tline["owner_uid"]);
+				Debug::log(sprintf("=> %s (ID: %d, UID: %d), last updated: %s", $tline["title"], $tline["id"], $tline["owner_uid"],
+					$tline["last_updated"] ? $tline["last_updated"] : "never"));
 
 				if (array_search($tline["owner_uid"], $batch_owners) === false)
 					array_push($batch_owners, $tline["owner_uid"]);
 
 				$fstarted = microtime(true);
 
-				try {
-					self::update_rss_feed($tline["id"], true, false);
-				} catch (PDOException $e) {
-					Logger::get()->log_error(E_USER_NOTICE, $e->getMessage(), $e->getFile(), $e->getLine(), $e->getTraceAsString());
+				$quiet = (isset($options["quiet"])) ? "--quiet" : "";
+				$log = function_exists("flock") && isset($options['log']) ? '--log '.$options['log'] : '';
+				$log_level = isset($options['log-level']) ? '--log-level '.$options['log-level'] : '';
 
+				/* shared hosting may have this disabled and it's not strictly required */
+				if (self::function_enabled('passthru')) {
+					$exit_code = 0;
+
+					passthru(PHP_EXECUTABLE . " update.php --update-feed " . $tline["id"] . " --pidlock feed-" . $tline["id"] . " $quiet $log $log_level", $exit_code);
+
+					Debug::log(sprintf("<= %.4f (sec) exit code: %d", microtime(true) - $fstarted, $exit_code));
+
+					// -1 can be caused by a SIGCHLD handler which daemon master process installs (not every setup, apparently)
+					if ($exit_code != 0 && $exit_code != -1) {
+						$festh = $pdo->prepare("SELECT last_error FROM ttrss_feeds WHERE id = ?");
+						$festh->execute([$tline["id"]]);
+
+						if ($ferow = $festh->fetch()) {
+							$error_message = $ferow["last_error"];
+						} else {
+							$error_message = "N/A";
+						}
+
+						Debug::log("!! Last error: $error_message");
+
+						Logger::get()->log(E_USER_NOTICE,
+							sprintf("Update process for feed %d (%s, owner UID: %d) failed with exit code: %d (%s).",
+								$tline["id"], clean($tline["title"]), $tline["owner_uid"], $exit_code, clean($error_message)));
+
+						$combined_error_message = sprintf("Update process failed with exit code: %d (%s)",
+							$exit_code, clean($error_message));
+
+						# mark failed feed as having an update error (unless it is already marked)
+						$fusth = $pdo->prepare("UPDATE ttrss_feeds SET last_error = ? WHERE id = ? AND last_error = ''");
+						$fusth->execute([$combined_error_message, $tline["id"]]);
+					}
+
+				} else {
 					try {
-						$pdo->rollback();
+						if (!self::update_rss_feed($tline["id"], true)) {
+							global $fetch_last_error;
+
+							Logger::get()->log(E_USER_NOTICE,
+								sprintf("Update request for feed %d (%s, owner UID: %d) failed: %s.",
+									$tline["id"], clean($tline["title"]), $tline["owner_uid"], clean($fetch_last_error)));
+						}
+
+						Debug::log(sprintf("<= %.4f (sec) (not using a separate process)", microtime(true) - $fstarted));
+
 					} catch (PDOException $e) {
-						// it doesn't matter if there wasn't actually anything to rollback, PDO Exception can be
-						// thrown outside of an active transaction during feed update
+						Logger::get()->log_error(E_USER_WARNING, $e->getMessage(), $e->getFile(), $e->getLine(), $e->getTraceAsString());
+
+						try {
+							$pdo->rollback();
+						} catch (PDOException $e) {
+							// it doesn't matter if there wasn't actually anything to rollback, PDO Exception can be
+							// thrown outside of an active transaction during feed update
+						}
 					}
 				}
-
-				Debug::log(sprintf("    %.4f (sec)", microtime(true) - $fstarted));
 
 				++$nf;
 			}
@@ -438,18 +504,24 @@ class RSSUtils {
 			Debug::log("unable to fetch: $fetch_last_error [$fetch_last_error_code]", Debug::$LOG_VERBOSE);
 
 			// If-Modified-Since
-			if ($fetch_last_error_code != 304) {
-				$error_message = $fetch_last_error;
-			} else {
+			if ($fetch_last_error_code == 304) {
 				Debug::log("source claims data not modified, nothing to do.", Debug::$LOG_VERBOSE);
 				$error_message = "";
+
+				$sth = $pdo->prepare("UPDATE ttrss_feeds SET last_error = ?,
+					last_successful_update = NOW(),
+					last_updated = NOW() WHERE id = ?");
+
+			} else {
+				$error_message = $fetch_last_error;
+
+				$sth = $pdo->prepare("UPDATE ttrss_feeds SET last_error = ?,
+					last_updated = NOW() WHERE id = ?");
 			}
 
-			$sth = $pdo->prepare("UPDATE ttrss_feeds SET last_error = ?,
-					last_updated = NOW() WHERE id = ?");
 			$sth->execute([$error_message, $feed]);
 
-			return;
+			return $error_message == "";
 		}
 
 		Debug::log("running HOOK_FEED_FETCHED handlers...", Debug::$LOG_VERBOSE);
@@ -792,7 +864,7 @@ class RSSUtils {
 				if (Debug::get_loglevel() >= Debug::$LOG_EXTENDED) {
 					Debug::log("matched filters: ", Debug::$LOG_VERBOSE);
 
-					if (count($matched_filters != 0)) {
+					if (count($matched_filters) != 0) {
 						print_r($matched_filters);
 					}
 
@@ -1173,8 +1245,11 @@ class RSSUtils {
 
 			Feeds::purge_feed($feed, 0);
 
-			$sth = $pdo->prepare("UPDATE ttrss_feeds
-				SET last_updated = NOW(), last_unconditional = NOW(), last_error = '' WHERE id = ?");
+			$sth = $pdo->prepare("UPDATE ttrss_feeds SET
+				last_updated = NOW(),
+				last_unconditional = NOW(),
+				last_successful_update = NOW(),
+				last_error = '' WHERE id = ?");
 			$sth->execute([$feed]);
 
 		} else {
@@ -1189,8 +1264,10 @@ class RSSUtils {
 				}
 			}
 
-			$sth = $pdo->prepare("UPDATE ttrss_feeds SET last_error = ?,
-				last_updated = NOW(), last_unconditional = NOW() WHERE id = ?");
+			$sth = $pdo->prepare("UPDATE ttrss_feeds SET
+				last_error = ?,
+				last_updated = NOW(),
+				last_unconditional = NOW() WHERE id = ?");
 			$sth->execute([$error_msg, $feed]);
 
 			unset($rss);
@@ -1271,9 +1348,9 @@ class RSSUtils {
 	static function cache_media($html, $site_url) {
 		$cache = new DiskCache("images");
 
-		if ($cache->isWritable()) {
+		if ($html && $cache->isWritable()) {
 			$doc = new DOMDocument();
-			if ($doc->loadHTML($html)) {
+			if (@$doc->loadHTML($html)) {
 				$xpath = new DOMXPath($doc);
 
 				$entries = $xpath->query('(//img[@src]|//source[@src|@srcset]|//video[@poster|@src])');
@@ -1512,6 +1589,44 @@ class RSSUtils {
 		$pdo->query("DELETE FROM ttrss_cat_counters_cache");
 	}
 
+	static function disable_failed_feeds() {
+		if (defined('DAEMON_UNSUCCESSFUL_DAYS_LIMIT') && DAEMON_UNSUCCESSFUL_DAYS_LIMIT > 0) {
+
+			$pdo = Db::pdo();
+
+			$pdo->beginTransaction();
+
+			$days = (int) DAEMON_UNSUCCESSFUL_DAYS_LIMIT;
+
+			if (DB_TYPE == "pgsql") {
+				$interval_query = "last_successful_update < NOW() - INTERVAL '$days days' AND last_updated > NOW() - INTERVAL '1 days'";
+			} else if (DB_TYPE == "mysql") {
+				$interval_query = "last_successful_update < DATE_SUB(NOW(), INTERVAL $days DAY) AND last_updated > DATE_SUB(NOW(), INTERVAL 1 DAY)";
+			}
+
+			$sth = $pdo->prepare("SELECT id, title, owner_uid
+				FROM ttrss_feeds
+				WHERE update_interval != -1 AND last_successful_update IS NOT NULL AND $interval_query");
+
+			$sth->execute();
+
+			while ($row = $sth->fetch()) {
+				Logger::get()->log(E_USER_NOTICE,
+					sprintf("Auto disabling feed %d (%s, UID: %d) because it failed to update for %d days.",
+						$row["id"], clean($row["title"]), $row["owner_uid"], DAEMON_UNSUCCESSFUL_DAYS_LIMIT));
+
+				Debug::log(sprintf("Auto-disabling feed %d (%s) (failed to update for %d days).", $row["id"],
+					clean($row["title"]), DAEMON_UNSUCCESSFUL_DAYS_LIMIT));
+			}
+
+			$sth = $pdo->prepare("UPDATE ttrss_feeds SET update_interval = -1 WHERE
+				update_interval != -1 AND last_successful_update IS NOT NULL AND $interval_query");
+			$sth->execute();
+
+			$pdo->commit();
+		}
+	}
+
 	static function housekeeping_user($owner_uid) {
 		$tmph = new PluginHost();
 
@@ -1527,6 +1642,8 @@ class RSSUtils {
 		self::expire_error_log();
 		self::expire_feed_archive();
 		self::cleanup_feed_browser();
+		self::cleanup_feed_icons();
+		self::disable_failed_feeds();
 
 		Article::purge_orphans();
 		self::cleanup_counters_cache();
@@ -1720,7 +1837,7 @@ class RSSUtils {
 		if ($html = @UrlHelper::fetch($url)) {
 
 			$doc = new DOMDocument();
-			if ($doc->loadHTML($html)) {
+			if (@$doc->loadHTML($html)) {
 				$xpath = new DOMXPath($doc);
 
 				$base = $xpath->query('/html/head/base[@href]');
@@ -1772,5 +1889,10 @@ class RSSUtils {
 		}
 
 		return implode(",", $tokens);
+	}
+
+	static function function_enabled($func) {
+		return !in_array($func,
+						explode(',', (string)ini_get('disable_functions')));
 	}
 }
