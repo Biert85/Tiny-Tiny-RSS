@@ -453,7 +453,7 @@ class Handler_Public extends Handler {
 
 			if ($login) {
 				$user = ORM::for_table('ttrss_users')
-					->select('id', 'resetpass_token')
+					->select_many('id', 'resetpass_token')
 					->where_raw('LOWER(login) = LOWER(?)', [$login])
 					->find_one();
 
