@@ -86,9 +86,10 @@
 		"gen-search-idx" => "generate basic PostgreSQL fulltext search index",
 		"plugins-list" => "list installed plugins",
 		"debug-feed:" => ["N", "update specified feed with debug output enabled"],
-		"debug-force-refetch" => "debug update: force refetch feed data",
-		"debug-force-rehash" => "debug update: force rehash articles",
+		"force-refetch" => "debug update: force refetch feed data",
+		"force-rehash" => "debug update: force rehash articles",
 		"opml-export:" => ["USER:FILE", "export OPML of USER to FILE"],
+		"opml-import:" => ["USER:FILE", "import OPML for USER from FILE"],
 		"user-list" => "list all users",
 #		"user-add:" => ["USER[:PASSWORD]", "add USER, optionally without prompting for PASSWORD"],
 #		"user-remove:" => ["USERNAME", "remove specified user"],
@@ -379,6 +380,22 @@
 			$opml = new OPML("");
 
 			$rc = $opml->opml_export($filename, $owner_uid, false, true, true);
+
+			Debug::log($rc ? "Success." : "Failed.");
+		} else {
+			Debug::log("User not found: $user");
+		}
+	}
+
+	if (isset($options["opml-import"])) {
+		list ($user, $filename) = explode(":", $options["opml-import"], 2);
+
+		Debug::log("Importing feeds of user $user from OPML file $filename...");
+
+		if ($owner_uid = UserHelper::find_user_by_login($user)) {
+			$opml = new OPML("");
+
+			$rc = $opml->opml_import($owner_uid, $filename);
 
 			Debug::log($rc ? "Success." : "Failed.");
 		} else {

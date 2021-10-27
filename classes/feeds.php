@@ -230,17 +230,43 @@ class Feeds extends Handler_Protected {
 
 				$line["feed_title"] = $line["feed_title"] ?? "";
 
+				$button_doc = new DOMDocument();
+
 				$line["buttons_left"] = "";
 				PluginHost::getInstance()->chain_hooks_callback(PluginHost::HOOK_ARTICLE_LEFT_BUTTON,
-					function ($result) use (&$line) {
-						$line["buttons_left"] .= $result;
+					function ($result, $plugin) use (&$line, &$button_doc) {
+						if ($result && $button_doc->loadXML($result)) {
+
+							/** @var DOMElement|null */
+							$child = $button_doc->firstChild;
+
+							if ($child) {
+								do {
+									$child->setAttribute('data-plugin-name', get_class($plugin));
+								} while ($child = $child->nextSibling);
+
+								$line["buttons_left"] .= $button_doc->saveXML($button_doc->firstChild);
+							}
+						}
 					},
 					$line);
 
 				$line["buttons"] = "";
 				PluginHost::getInstance()->chain_hooks_callback(PluginHost::HOOK_ARTICLE_BUTTON,
-					function ($result) use (&$line) {
-						$line["buttons"] .= $result;
+					function ($result, $plugin) use (&$line, &$button_doc) {
+						if ($result && $button_doc->loadXML($result)) {
+
+							/** @var DOMElement|null */
+							$child = $button_doc->firstChild;
+
+							if ($child) {
+								do {
+									$child->setAttribute('data-plugin-name', get_class($plugin));
+								} while ($child = $child->nextSibling);
+
+								$line["buttons"] .= $button_doc->saveXML($button_doc->firstChild);
+							}
+						}
 					},
 					$line);
 
@@ -585,6 +611,23 @@ class Feeds extends Handler_Protected {
 			"all_languages" => Pref_Feeds::get_ts_languages(),
 			"default_language" => get_pref(Prefs::DEFAULT_SEARCH_LANGUAGE)
 		]);
+	}
+
+	function opensite() {
+		$feed = ORM::for_table('ttrss_feeds')
+			->find_one((int)$_REQUEST['feed_id']);
+
+		if ($feed) {
+			$site_url = UrlHelper::validate($feed->site_url);
+
+			if ($site_url) {
+				header("Location: $site_url");
+				return;
+			}
+		}
+
+		header($_SERVER["SERVER_PROTOCOL"]." 404 Not Found");
+		print "Feed not found or has an empty site URL.";
 	}
 
 	function updatedebugger() {
@@ -995,6 +1038,13 @@ class Feeds extends Handler_Protected {
 		$url = UrlHelper::validate($url);
 
 		if (!$url) return ["code" => 2];
+
+		PluginHost::getInstance()->chain_hooks_callback(PluginHost::HOOK_PRE_SUBSCRIBE,
+			/** @phpstan-ignore-next-line */
+			function ($result) use (&$url, &$auth_login, &$auth_pass) {
+				// arguments are updated inside the hook (if needed)
+			},
+			$url, $auth_login, $auth_pass);
 
 		$contents = UrlHelper::fetch($url, false, $auth_login, $auth_pass);
 
