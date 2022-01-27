@@ -18,9 +18,10 @@ class Feeds extends Handler_Protected {
 	}
 
 	/**
+	 * @param string|int $feed
 	 * @return array{0: array<int, int>, 1: int, 2: int, 3: bool, 4: array<string, mixed>} $topmost_article_ids, $headlines_count, $feed, $disable_cache, $reply
 	 */
-	private function _format_headlines_list(int $feed, string $method, string $view_mode, int $limit, bool $cat_view,
+	private function _format_headlines_list($feed, string $method, string $view_mode, int $limit, bool $cat_view,
 					int $offset, string $override_order, bool $include_children, ?int $check_first_id = null,
 					bool $skip_first_id_check, string $order_by): array {
 
@@ -132,7 +133,7 @@ class Feeds extends Handler_Protected {
 		$reply['vfeed_group_enabled'] = $vfeed_group_enabled;
 
 		$plugin_menu_items = "";
-		PluginHost::getInstance()->chain_hooks_callback(PluginHost::HOOK_HEADLINE_TOOLBAR_SELECT_MENU_ITEM,
+		PluginHost::getInstance()->chain_hooks_callback(PluginHost::HOOK_HEADLINE_TOOLBAR_SELECT_MENU_ITEM2,
 			function ($result) use (&$plugin_menu_items) {
 				$plugin_menu_items .= $result;
 			},
@@ -253,6 +254,10 @@ class Feeds extends Handler_Protected {
 
 								$line["buttons_left"] .= $button_doc->saveXML($button_doc->firstChild);
 							}
+						} else if ($result) {
+							user_error(get_class($plugin) .
+								" plugin: content provided in HOOK_ARTICLE_LEFT_BUTTON is not valid XML: " .
+								Errors::libxml_last_error() . " $result", E_USER_WARNING);
 						}
 					},
 					$line);
@@ -272,6 +277,10 @@ class Feeds extends Handler_Protected {
 
 								$line["buttons"] .= $button_doc->saveXML($button_doc->firstChild);
 							}
+						} else if ($result) {
+							user_error(get_class($plugin) .
+								" plugin: content provided in HOOK_ARTICLE_BUTTON is not valid XML: " .
+								Errors::libxml_last_error() . " $result", E_USER_WARNING);
 						}
 					},
 					$line);
@@ -717,7 +726,7 @@ class Feeds extends Handler_Protected {
 						<fieldset>
 							<label>
 							<?= \Controls\select_hash("xdebug", $xdebug,
-									[Debug::$LOG_VERBOSE => "LOG_VERBOSE", Debug::$LOG_EXTENDED => "LOG_EXTENDED"]);
+									[Debug::LOG_VERBOSE => "LOG_VERBOSE", Debug::LOG_EXTENDED => "LOG_EXTENDED"]);
 							?></label>
 						</fieldset>
 
@@ -954,7 +963,8 @@ class Feeds extends Handler_Protected {
 			$sth->execute([$owner_uid, $feed]);
 			$row = $sth->fetch();
 
-			return $row["count"];
+			// Handle 'SUM()' returning null if there are no results
+			return $row["count"] ?? 0;
 
 		} else if ($n_feed == -1) {
 			$match_part = "marked = true";
@@ -1213,7 +1223,10 @@ class Feeds extends Handler_Protected {
 		}
 	}
 
-	static function _get_title(int $id, bool $cat = false): string {
+	/**
+	 * @param string|int $id
+	 */
+	static function _get_title($id, bool $cat = false): string {
 		$pdo = Db::pdo();
 
 		if ($cat) {
@@ -1355,7 +1368,8 @@ class Feeds extends Handler_Protected {
 		$sth->execute([$user_id]);
 		$row = $sth->fetch();
 
-		return $row["count"];
+		// Handle 'SUM()' returning null if there are no articles/results (e.g. admin user with no feeds)
+		return $row["count"] ?? 0;
 	}
 
 	static function _get_cat_title(int $cat_id): string {
@@ -2128,7 +2142,7 @@ class Feeds extends Handler_Protected {
 			$owner_uid = $row["owner_uid"];
 
 			if (Config::get(Config::FORCE_ARTICLE_PURGE) != 0) {
-				Debug::log("purge_feed: FORCE_ARTICLE_PURGE is set, overriding interval to " . Config::get(Config::FORCE_ARTICLE_PURGE), Debug::$LOG_VERBOSE);
+				Debug::log("purge_feed: FORCE_ARTICLE_PURGE is set, overriding interval to " . Config::get(Config::FORCE_ARTICLE_PURGE), Debug::LOG_VERBOSE);
 				$purge_unread = true;
 				$purge_interval = Config::get(Config::FORCE_ARTICLE_PURGE);
 			} else {
@@ -2137,10 +2151,10 @@ class Feeds extends Handler_Protected {
 
 			$purge_interval = (int) $purge_interval;
 
-			Debug::log("purge_feed: interval $purge_interval days for feed $feed_id, owner: $owner_uid, purge unread: $purge_unread", Debug::$LOG_VERBOSE);
+			Debug::log("purge_feed: interval $purge_interval days for feed $feed_id, owner: $owner_uid, purge unread: $purge_unread", Debug::LOG_VERBOSE);
 
 			if ($purge_interval <= 0) {
-				Debug::log("purge_feed: purging disabled for this feed, nothing to do.", Debug::$LOG_VERBOSE);
+				Debug::log("purge_feed: purging disabled for this feed, nothing to do.", Debug::LOG_VERBOSE);
 				return null;
 			}
 
@@ -2173,10 +2187,10 @@ class Feeds extends Handler_Protected {
 
 			$rows_deleted = $sth->rowCount();
 
-			Debug::log("purge_feed: deleted $rows_deleted articles.", Debug::$LOG_VERBOSE);
+			Debug::log("purge_feed: deleted $rows_deleted articles.", Debug::LOG_VERBOSE);
 
 		} else {
-			Debug::log("purge_feed: owner of $feed_id not found", Debug::$LOG_VERBOSE);
+			Debug::log("purge_feed: owner of $feed_id not found", Debug::LOG_VERBOSE);
 		}
 
 		return $rows_deleted;

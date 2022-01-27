@@ -189,11 +189,19 @@ class PluginHost {
 	/** @see Plugin::hook_headlines_custom_sort_override() */
 	const HOOK_HEADLINES_CUSTOM_SORT_OVERRIDE = "hook_headlines_custom_sort_override";
 
-	/** @see Plugin::hook_headline_toolbar_select_menu_item() */
+	/** @see Plugin::hook_headline_toolbar_select_menu_item()
+	 * @deprecated removed, see PluginHost::HOOK_HEADLINE_TOOLBAR_SELECT_MENU_ITEM2
+	*/
 	const HOOK_HEADLINE_TOOLBAR_SELECT_MENU_ITEM = "hook_headline_toolbar_select_menu_item";
+
+	/** @see Plugin::hook_headline_toolbar_select_menu_item() */
+	const HOOK_HEADLINE_TOOLBAR_SELECT_MENU_ITEM2 = "hook_headline_toolbar_select_menu_item2";
 
 	/** @see Plugin::hook_pre_subscribe() */
 	const HOOK_PRE_SUBSCRIBE = "hook_pre_subscribe";
+
+	/** @see Plugin::hook_post_logout() */
+	const HOOK_POST_LOGOUT = "hook_post_logout";
 
 	const KIND_ALL = 1;
 	const KIND_SYSTEM = 2;
@@ -267,9 +275,10 @@ class PluginHost {
 	 * @param mixed $args
 	 */
 	function run_hooks(string $hook, ...$args): void {
-		$method = strtolower($hook);
 
-		foreach ($this->get_hooks($hook) as $plugin) {
+		$method = strtolower((string)$hook);
+
+		foreach ($this->get_hooks((string)$hook) as $plugin) {
 			//Debug::log("invoking: " . get_class($plugin) . "->$hook()", Debug::$LOG_VERBOSE);
 
 			try {
@@ -288,9 +297,9 @@ class PluginHost {
 	 * @param mixed $check
 	 */
 	function run_hooks_until(string $hook, $check, ...$args): bool {
-		$method = strtolower($hook);
+		$method = strtolower((string)$hook);
 
-		foreach ($this->get_hooks($hook) as $plugin) {
+		foreach ($this->get_hooks((string)$hook) as $plugin) {
 			try {
 				$result = $plugin->$method(...$args);
 
@@ -312,9 +321,9 @@ class PluginHost {
 	 * @param mixed $args
 	 */
 	function run_hooks_callback(string $hook, Closure $callback, ...$args): void {
-		$method = strtolower($hook);
+		$method = strtolower((string)$hook);
 
-		foreach ($this->get_hooks($hook) as $plugin) {
+		foreach ($this->get_hooks((string)$hook) as $plugin) {
 			//Debug::log("invoking: " . get_class($plugin) . "->$hook()", Debug::$LOG_VERBOSE);
 
 			try {
@@ -333,9 +342,9 @@ class PluginHost {
 	 * @param mixed $args
 	 */
 	function chain_hooks_callback(string $hook, Closure $callback, &...$args): void {
-		$method = strtolower($hook);
+		$method = strtolower((string)$hook);
 
-		foreach ($this->get_hooks($hook) as $plugin) {
+		foreach ($this->get_hooks((string)$hook) as $plugin) {
 			//Debug::log("invoking: " . get_class($plugin) . "->$hook()", Debug::$LOG_VERBOSE);
 
 			try {
@@ -355,7 +364,7 @@ class PluginHost {
 	function add_hook(string $type, Plugin $sender, int $priority = 50): void {
 		$priority = (int) $priority;
 
-		if (!method_exists($sender, strtolower($type))) {
+		if (!method_exists($sender, strtolower((string)$type))) {
 			user_error(
 				sprintf("Plugin %s tried to register a hook without implementation: %s",
 					get_class($sender), $type),
@@ -419,7 +428,7 @@ class PluginHost {
 
 		asort($plugins);
 
-		$this->load(join(",", $plugins), $kind, $owner_uid, $skip_init);
+		$this->load(join(",", $plugins), (int)$kind, $owner_uid, $skip_init);
 	}
 
 	/**
