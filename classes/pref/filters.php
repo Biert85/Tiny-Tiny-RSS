@@ -115,6 +115,7 @@ class Pref_Filters extends Handler_Protected {
 		$glue = $filter['match_any_rule'] ? " OR " :  " AND ";
 		$scope_qpart = join($glue, $scope_qparts);
 
+		/** @phpstan-ignore-next-line */
 		if (!$scope_qpart) $scope_qpart = "true";
 
 		$rv = array();
@@ -537,7 +538,7 @@ class Pref_Filters extends Handler_Protected {
 
 		$sth = $this->pdo->prepare("DELETE FROM ttrss_filters2 WHERE id IN ($ids_qmarks)
 			AND owner_uid = ?");
-		$sth->execute(array_merge($ids, [$_SESSION['uid']]));
+		$sth->execute([...$ids, $_SESSION['uid']]);
 	}
 
 	private function _save_rules_and_actions(int $filter_id): void {
@@ -684,10 +685,12 @@ class Pref_Filters extends Handler_Protected {
 						<?= __('Create filter') ?></button>
 					<button dojoType="dijit.form.Button" onclick="return dijit.byId('filterTree').joinSelectedFilters()">
 						<?= __('Combine') ?></button>
-					<button dojoType="dijit.form.Button" onclick="return dijit.byId('filterTree').resetFilterOrder()">
-						<?= __('Reset sort order') ?></button>
 					<button dojoType="dijit.form.Button" onclick="return dijit.byId('filterTree').removeSelectedFilters()">
 						<?= __('Remove') ?></button>
+					<button dojoType="dijit.form.Button" onclick="return dijit.byId('filterTree').resetFilterOrder()">
+						<?= __('Reset sort order') ?></button>
+					<button dojoType="dijit.form.Button" onclick="return dijit.byId('filterTree').toggleRules()">
+						<?= __('Toggle rule display') ?></button>
 
 				</div>
 			</div>
@@ -701,14 +704,6 @@ class Pref_Filters extends Handler_Protected {
 				</div>
 				<div dojoType="fox.PrefFilterTree" id="filterTree" dndController="dijit.tree.dndSource"
 					betweenThreshold="5" model="filterModel" openOnClick="true">
-					<script type="dojo/method" event="onClick" args="item">
-						var id = String(item.id);
-						var bare_id = id.substr(id.indexOf(':')+1);
-
-						if (id.match('FILTER:')) {
-							Filters.edit(bare_id);
-						}
-					</script>
 				</div>
 			</div>
 			<?php PluginHost::getInstance()->run_hooks(PluginHost::HOOK_PREFS_TAB, "prefFilters") ?>
@@ -786,11 +781,11 @@ class Pref_Filters extends Handler_Protected {
 
 			$sth = $this->pdo->prepare("UPDATE ttrss_filters2_rules
 				SET filter_id = ? WHERE filter_id IN ($ids_qmarks)");
-			$sth->execute(array_merge([$base_id], $ids));
+			$sth->execute([$base_id, ...$ids]);
 
 			$sth = $this->pdo->prepare("UPDATE ttrss_filters2_actions
 				SET filter_id = ? WHERE filter_id IN ($ids_qmarks)");
-			$sth->execute(array_merge([$base_id], $ids));
+			$sth->execute([$base_id, ...$ids]);
 
 			$sth = $this->pdo->prepare("DELETE FROM ttrss_filters2 WHERE id IN ($ids_qmarks)");
 			$sth->execute($ids);

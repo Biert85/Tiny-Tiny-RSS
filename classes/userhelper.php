@@ -17,6 +17,15 @@ class UserHelper {
 		self::HASH_ALGO_SHA1
 	];
 
+	const ACCESS_LEVELS = [
+		self::ACCESS_LEVEL_DISABLED,
+		self::ACCESS_LEVEL_READONLY,
+		self::ACCESS_LEVEL_USER,
+		self::ACCESS_LEVEL_POWERUSER,
+		self::ACCESS_LEVEL_ADMIN,
+		self::ACCESS_LEVEL_KEEP_CURRENT
+	];
+
 	/** forbidden to login */
 	const ACCESS_LEVEL_DISABLED 		= -2;
 
@@ -31,6 +40,23 @@ class UserHelper {
 
 	/** has administrator permissions */
 	const ACCESS_LEVEL_ADMIN			= 10;
+
+	/** used by self::user_modify() to keep current access level */
+	const ACCESS_LEVEL_KEEP_CURRENT = -1024;
+
+	/**
+	 * @param int $level integer loglevel value
+	 * @return UserHelper::ACCESS_LEVEL_* if valid, warn and return ACCESS_LEVEL_KEEP_CURRENT otherwise
+	 */
+	public static function map_access_level(int $level) : int {
+		if (in_array($level, self::ACCESS_LEVELS)) {
+			/** @phpstan-ignore-next-line */
+			return $level;
+		} else {
+			user_error("Passed invalid user access level: $level", E_USER_WARNING);
+			return self::ACCESS_LEVEL_KEEP_CURRENT;
+		}
+	}
 
 	static function authenticate(string $login = null, string $password = null, bool $check_only = false, string $service = null): bool {
 		if (!Config::get(Config::SINGLE_USER_MODE)) {
@@ -57,12 +83,10 @@ class UserHelper {
 				$user = ORM::for_table('ttrss_users')->find_one($user_id);
 
 				if ($user && $user->access_level != self::ACCESS_LEVEL_DISABLED) {
-					$_SESSION["uid"] = $user_id;
+					self::set_session_for_user($user_id);
 					$_SESSION["auth_module"] = $auth_module;
 					$_SESSION["name"] = $user->login;
 					$_SESSION["access_level"] = $user->access_level;
-					$_SESSION["csrf_token"] = bin2hex(get_random_bytes(16));
-					$_SESSION["ip_address"] = UserHelper::get_user_ip();
 					$_SESSION["pwd_hash"] = $user->pwd_hash;
 
 					$user->last_login = Db::NOW();
@@ -80,8 +104,7 @@ class UserHelper {
 			return false;
 
 		} else {
-
-			$_SESSION["uid"] = 1;
+			self::set_session_for_user(1);
 			$_SESSION["name"] = "admin";
 			$_SESSION["access_level"] = self::ACCESS_LEVEL_ADMIN;
 
@@ -90,12 +113,20 @@ class UserHelper {
 
 			$_SESSION["auth_module"] = false;
 
-			if (empty($_SESSION["csrf_token"]))
-				$_SESSION["csrf_token"] = bin2hex(get_random_bytes(16));
-
-			$_SESSION["ip_address"] = UserHelper::get_user_ip();
-
 			return true;
+		}
+	}
+
+	static function set_session_for_user(int $owner_uid): void {
+		$_SESSION["uid"] = $owner_uid;
+		$_SESSION["last_login_update"] = time();
+		$_SESSION["ip_address"] = UserHelper::get_user_ip();
+
+		if (empty($_SESSION["csrf_token"]))
+			$_SESSION["csrf_token"] = bin2hex(get_random_bytes(16));
+
+		if (Config::get_schema_version() >= 120) {
+			$_SESSION["language"] = get_pref(Prefs::USER_LANGUAGE, $owner_uid);
 		}
 	}
 
@@ -131,7 +162,7 @@ class UserHelper {
 			if (empty($_SESSION["uid"])) {
 
 				if (Config::get(Config::AUTH_AUTO_LOGIN) && self::authenticate(null, null)) {
-					$_SESSION["ref_schema_version"] = get_schema_version();
+					$_SESSION["ref_schema_version"] = Config::get_schema_version();
 				} else {
 					 self::authenticate(null, null, true);
 				}
@@ -215,6 +246,7 @@ class UserHelper {
 		return substr(bin2hex(get_random_bytes(125)), 0, 250);
 	}
 
+	/** TODO: this should invoke UserHelper::user_modify() */
 	static function reset_password(int $uid, bool $format_output = false, string $new_password = ""): void {
 
 		$user = ORM::for_table('ttrss_users')->find_one($uid);
@@ -333,18 +365,14 @@ class UserHelper {
 		return null;
 	}
 
-	static function is_default_password(): bool {
-
-		/** @var Auth_Internal|false $authenticator -- this is only here to make check_password() visible to static analyzer */
-		$authenticator = PluginHost::getInstance()->get_plugin($_SESSION["auth_module"]);
-
-		if ($authenticator &&
-                method_exists($authenticator, "check_password") &&
-                $authenticator->check_password($_SESSION["uid"], "password")) {
-
-			return true;
-		}
-		return false;
+	/**
+	 * @param null|int $owner_uid if null, checks current user via session-specific auth module, if set works on internal database only
+	 * @return bool
+	 * @throws PDOException
+	 * @throws Exception
+	 */
+	static function is_default_password(?int $owner_uid = null): bool {
+		return self::user_has_password($owner_uid, 'password');
 	}
 
 	/**
@@ -378,4 +406,115 @@ class UserHelper {
 		else
 			return false;
 	}
+
+	/**
+	 * @param string $login Login for new user (case-insensitive)
+	 * @param string $password Password for new user (may not be blank)
+	 * @param UserHelper::ACCESS_LEVEL_* $access_level Access level for new user
+	 * @return bool true if user has been created
+	 */
+	static function user_add(string $login, string $password, int $access_level) : bool {
+		$login = clean($login);
+
+		if ($login &&
+			$password &&
+			!self::find_user_by_login($login) &&
+			self::map_access_level((int)$access_level) != self::ACCESS_LEVEL_KEEP_CURRENT) {
+
+			$user = ORM::for_table('ttrss_users')->create();
+
+			$user->salt = self::get_salt();
+			$user->login = mb_strtolower($login);
+			$user->pwd_hash = self::hash_password($password, $user->salt);
+			$user->access_level = $access_level;
+			$user->created = Db::NOW();
+
+			return $user->save();
+		}
+
+		return false;
+	}
+
+	/**
+	 * @param int $uid User ID to modify
+	 * @param string $new_password set password to this value if its not blank
+	 * @param UserHelper::ACCESS_LEVEL_* $access_level set user access level to this value if it is set (default ACCESS_LEVEL_KEEP_CURRENT)
+	 * @return bool true if user record has been saved
+	 *
+	 * NOTE: $access_level is of mixed type because of intellephense
+	 */
+	static function user_modify(int $uid, string $new_password = '', $access_level = self::ACCESS_LEVEL_KEEP_CURRENT) : bool {
+		$user = ORM::for_table('ttrss_users')->find_one($uid);
+
+		if ($user) {
+			if ($new_password != '') {
+				$new_salt = self::get_salt();
+				$pwd_hash = self::hash_password($new_password, $new_salt, self::HASH_ALGOS[0]);
+
+				$user->pwd_hash = $pwd_hash;
+				$user->salt = $new_salt;
+			}
+
+			if ($access_level != self::ACCESS_LEVEL_KEEP_CURRENT) {
+				$user->access_level = (int)$access_level;
+			}
+
+			return $user->save();
+		}
+
+		return false;
+	}
+
+	/**
+	 * @param int $uid user ID to delete (this won't delete built-in admin user with UID 1)
+	 * @return bool true if user has been deleted
+	 */
+	static function user_delete(int $uid) : bool {
+		if ($uid != 1) {
+
+			$user = ORM::for_table('ttrss_users')->find_one($uid);
+
+			if ($user) {
+				// TODO: is it still necessary to split those queries?
+
+				ORM::for_table('ttrss_tags')
+					->where('owner_uid', $uid)
+					->delete_many();
+
+				ORM::for_table('ttrss_feeds')
+					->where('owner_uid', $uid)
+					->delete_many();
+
+				return $user->delete();
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * @param null|int $owner_uid if null, checks current user via session-specific auth module, if set works on internal database only
+	 * @param string $password password to compare hash against
+	 * @return bool
+	 */
+	static function user_has_password(?int $owner_uid, string $password) : bool {
+		if ($owner_uid) {
+			$authenticator = new Auth_Internal();
+
+			return $authenticator->check_password($owner_uid, $password);
+		} else {
+			/** @var Auth_Internal|false $authenticator -- this is only here to make check_password() visible to static analyzer */
+			$authenticator = PluginHost::getInstance()->get_plugin($_SESSION["auth_module"]);
+
+			if ($authenticator &&
+						method_exists($authenticator, "check_password") &&
+						$authenticator->check_password($_SESSION["uid"], $password)) {
+
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 }

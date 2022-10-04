@@ -6,30 +6,18 @@ class UrlHelper {
 		"tel"
 	];
 
-	// TODO: class properties can be switched to PHP typing if/when the minimum PHP_VERSION is raised to 7.4.0+
-	/** @var string */
-	static $fetch_last_error;
+	const EXTRA_SCHEMES_BY_CONTENT_TYPE = [
+		"application/x-bittorrent" => [ "magnet" ],
+	];
 
-	/** @var int */
-	static $fetch_last_error_code;
-
-	/** @var string */
-	static $fetch_last_error_content;
-
-	/** @var string */
-	static $fetch_last_content_type;
-
-	/** @var string */
-	static $fetch_last_modified;
-
-	/** @var string */
-	static $fetch_effective_url;
-
-	/** @var string */
-	static $fetch_effective_ip_addr;
-
-	/** @var bool */
-	static $fetch_curl_used;
+	static string $fetch_last_error;
+	static int $fetch_last_error_code;
+	static string $fetch_last_error_content;
+	static string $fetch_last_content_type;
+	static string $fetch_last_modified;
+	static string $fetch_effective_url;
+	static string $fetch_effective_ip_addr;
+	static bool $fetch_curl_used;
 
 	/**
 	 * @param array<string, string|int> $parts
@@ -52,11 +40,19 @@ class UrlHelper {
 	 * @param string $rel_url Possibly relative URL in the document
 	 * @param string $owner_element Owner element tag name (i.e. "a") (optional)
 	 * @param string $owner_attribute Owner attribute (i.e. "href") (optional)
+	 * @param string $content_type URL content type as specified by enclosures, etc.
 	 *
 	 * @return false|string Absolute URL or false on failure (either during URL parsing or validation)
 	 */
-	public static function rewrite_relative($base_url, $rel_url, string $owner_element = "", string $owner_attribute = "") {
+	public static function rewrite_relative($base_url,
+				$rel_url,
+				string $owner_element = "",
+				string $owner_attribute = "",
+				string $content_type = "") {
+
 		$rel_parts = parse_url($rel_url);
+
+		if (!$rel_url) return $base_url;
 
 		/**
 		 * If parse_url failed to parse $rel_url return false to match the current "invalid thing" behavior
@@ -80,6 +76,11 @@ class UrlHelper {
 				$owner_element == "a" &&
 				$owner_attribute == "href") {
 			return $rel_url;
+		// allow some extra schemes for links with feed-specified content type i.e. enclosures
+		} else if ($content_type &&
+				isset(self::EXTRA_SCHEMES_BY_CONTENT_TYPE[$content_type]) &&
+				in_array($rel_parts["scheme"], self::EXTRA_SCHEMES_BY_CONTENT_TYPE[$content_type])) {
+			return $rel_url;
 		// allow limited subset of inline base64-encoded images for IMG elements
 		} else if (($rel_parts["scheme"] ?? "") == "data" &&
 				preg_match('%^image/(webp|gif|jpg|png|svg);base64,%', $rel_parts["path"]) &&
@@ -92,17 +93,23 @@ class UrlHelper {
 			$rel_parts['host'] = $base_parts['host'] ?? "";
 			$rel_parts['scheme'] = $base_parts['scheme'] ?? "";
 
-			if (isset($rel_parts['path'])) {
+			if ($rel_parts['path'] ?? "") {
 
-				// experimental: if relative url path is not absolute (i.e. starting with /) concatenate it using base url path
-				// (i'm not sure if it's a good idea)
+				// we append dirname() of base path to relative URL path as per RFC 3986 section 5.2.2
+				$base_path = with_trailing_slash(dirname($base_parts['path'] ?? ""));
 
-				if (strpos($rel_parts['path'], '/') !== 0) {
-					$rel_parts['path'] = with_trailing_slash($base_parts['path'] ?? "") . $rel_parts['path'];
+				// 1. absolute relative path (/test.html) = no-op, proceed as is
+
+				// 2. dotslash relative URI (./test.html) - strip "./", append base path
+				if (strpos($rel_parts['path'], './') === 0) {
+					$rel_parts['path'] = $base_path . substr($rel_parts['path'], 2);
+				// 3. anything else relative (test.html) - append dirname() of base path
+				} else if (strpos($rel_parts['path'], '/') !== 0) {
+					$rel_parts['path'] = $base_path . $rel_parts['path'];
 				}
 
-				$rel_parts['path'] = str_replace("/./", "/", $rel_parts['path']);
-				$rel_parts['path'] = str_replace("//", "/", $rel_parts['path']);
+				//$rel_parts['path'] = str_replace("/./", "/", $rel_parts['path']);
+				//$rel_parts['path'] = str_replace("//", "/", $rel_parts['path']);
 			}
 
 			return self::validate(self::build_url($rel_parts));
@@ -183,32 +190,26 @@ class UrlHelper {
 		if ($nest > 10)
 			return false;
 
-		if (version_compare(PHP_VERSION, '7.1.0', '>=')) {
-			$context_options = array(
-				'http' => array(
-					 'header' => array(
-						 'Connection: close'
-					 ),
-					 'method' => 'HEAD',
-					 'timeout' => $timeout,
-					 'protocol_version'=> 1.1)
-				);
+		$context_options = array(
+			'http' => array(
+					'header' => array(
+						'Connection: close'
+					),
+					'method' => 'HEAD',
+					'timeout' => $timeout,
+					'protocol_version'=> 1.1)
+			);
 
-			if (Config::get(Config::HTTP_PROXY)) {
-				$context_options['http']['request_fulluri'] = true;
-				$context_options['http']['proxy'] = Config::get(Config::HTTP_PROXY);
-			}
-
-			$context = stream_context_create($context_options);
-
-			// PHP 8 changed the second param from int to bool, but we still support PHP >= 7.1.0
-			// @phpstan-ignore-next-line
-			$headers = get_headers($url, 0, $context);
-		} else {
-			// PHP 8 changed the second param from int to bool, but we still support PHP >= 7.1.0
-			// @phpstan-ignore-next-line
-			$headers = get_headers($url, 0);
+		if (Config::get(Config::HTTP_PROXY)) {
+			$context_options['http']['request_fulluri'] = true;
+			$context_options['http']['proxy'] = Config::get(Config::HTTP_PROXY);
 		}
+
+		$context = stream_context_create($context_options);
+
+		// PHP 8 changed the second param from int to bool, but we still support PHP >= 7.4.0
+		// @phpstan-ignore-next-line
+		$headers = get_headers($url, 0, $context);
 
 		if (is_array($headers)) {
 			$headers = array_reverse($headers); // last one is the correct one
@@ -329,7 +330,7 @@ class UrlHelper {
 			curl_setopt($ch, CURLOPT_BINARYTRANSFER, true);
 			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 			curl_setopt($ch, CURLOPT_HEADER, true);
-			curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+			curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 			curl_setopt($ch, CURLOPT_USERAGENT, $useragent ? $useragent : Config::get_user_agent());
 			curl_setopt($ch, CURLOPT_ENCODING, "");
 			curl_setopt($ch, CURLOPT_COOKIEJAR, "/dev/null");
@@ -369,6 +370,20 @@ class UrlHelper {
 				curl_setopt($ch, CURLOPT_USERPWD, "$login:$pass");
 
 			$ret = @curl_exec($ch);
+			$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+			// CURLAUTH_BASIC didn't work, let's retry with CURLAUTH_ANY in case it's actually something
+			// unusual like NTLM...
+			if ($http_code == 403 && $login && $pass) {
+				curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+
+				$ret = @curl_exec($ch);
+			}
+
+			if (curl_errno($ch) === 23 || curl_errno($ch) === 61) {
+				curl_setopt($ch, CURLOPT_ENCODING, 'none');
+				$ret = @curl_exec($ch);
+			}
 
 			$headers_length = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 			$headers = explode("\r\n", substr($ret, 0, $headers_length));
@@ -387,11 +402,6 @@ class UrlHelper {
 					self::$fetch_last_error_code = (int) substr($header, 9, 3);
 					self::$fetch_last_error = $header;
 				}
-			}
-
-			if (curl_errno($ch) === 23 || curl_errno($ch) === 61) {
-				curl_setopt($ch, CURLOPT_ENCODING, 'none');
-				$contents = @curl_exec($ch);
 			}
 
 			$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -429,7 +439,11 @@ class UrlHelper {
 			}
 
 			if (!$contents) {
-				self::$fetch_last_error = curl_errno($ch) . " " . curl_error($ch);
+				if (curl_errno($ch) === 0) {
+					self::$fetch_last_error = 'Successful response, but no content was received.';
+				} else {
+					self::$fetch_last_error = curl_errno($ch) . " " . curl_error($ch);
+				}
 				curl_close($ch);
 				return false;
 			}
@@ -510,6 +524,11 @@ class UrlHelper {
 
 			$data = @file_get_contents($url, false, $context);
 
+			if ($data === false) {
+				self::$fetch_last_error = "'file_get_contents' failed.";
+				return false;
+			}
+
 			foreach ($http_response_header as $header) {
 				if (strstr($header, ": ") !== false) {
 					list ($key, $value) = explode(": ", $header);
@@ -545,15 +564,20 @@ class UrlHelper {
 				return false;
 			}
 
-			$is_gzipped = RSSUtils::is_gzipped($data);
+			if ($data) {
+				$is_gzipped = RSSUtils::is_gzipped($data);
 
-			if ($is_gzipped && $data) {
-				$tmp = @gzdecode($data);
+				if ($is_gzipped) {
+					$tmp = @gzdecode($data);
 
-				if ($tmp) $data = $tmp;
+					if ($tmp) $data = $tmp;
+				}
+
+				return $data;
+			} else {
+				self::$fetch_last_error = 'Successful response, but no content was received.';
+				return false;
 			}
-
-			return $data;
 		}
 	}
 

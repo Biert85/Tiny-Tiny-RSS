@@ -1,8 +1,8 @@
 <?php
 require_once __DIR__ . "/vendor/autoload.php";
 
-use \andreskrey\Readability\Readability;
-use \andreskrey\Readability\Configuration;
+use \fivefilters\Readability\Readability;
+use \fivefilters\Readability\Configuration;
 
 class Af_Readability extends Plugin {
 
@@ -218,7 +218,11 @@ class Af_Readability extends Plugin {
 			}
 
 			try {
-				$r = new Readability(new Configuration());
+
+				$r = new Readability(new Configuration([
+					'fixRelativeURLs' => true,
+					'originalURL'     => $url,
+				]));
 
 				if ($r->parse($tmp)) {
 

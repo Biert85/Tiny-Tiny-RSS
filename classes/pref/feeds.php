@@ -172,7 +172,7 @@ class Pref_Feeds extends Handler_Protected {
 			if ($enable_cats) {
 				array_push($root['items'], $cat);
 			} else {
-				$root['items'] = array_merge($root['items'], $cat['items']);
+				array_push($root['items'], ...$cat['items']);
 			}
 
 			$sth = $this->pdo->prepare("SELECT * FROM
@@ -202,7 +202,7 @@ class Pref_Feeds extends Handler_Protected {
 				if ($enable_cats) {
 					array_push($root['items'], $cat);
 				} else {
-					$root['items'] = array_merge($root['items'], $cat['items']);
+					array_push($root['items'], ...$cat['items']);
 				}
 			}
 		}
@@ -848,7 +848,7 @@ class Pref_Feeds extends Handler_Protected {
 				if ($qpart) {
 					$sth = $this->pdo->prepare("UPDATE ttrss_feeds SET $qpart WHERE id IN ($feed_ids_qmarks)
 						AND owner_uid = ?");
-					$sth->execute(array_merge($feed_ids, [$_SESSION['uid']]));
+					$sth->execute([...$feed_ids, $_SESSION['uid']]);
 				}
 			}
 
@@ -973,20 +973,6 @@ class Pref_Feeds extends Handler_Protected {
 					persist="true"
 					model="feedModel"
 					openOnClick="false">
-					<script type="dojo/method" event="onClick" args="item">
-						var id = String(item.id);
-						var bare_id = id.substr(id.indexOf(':')+1);
-
-						if (id.match('FEED:')) {
-							CommonDialogs.editFeed(bare_id);
-						} else if (id.match('CAT:')) {
-							dijit.byId('feedTree').editCategory(bare_id, item);
-						}
-					</script>
-					<script type="dojo/method" event="onLoad" args="item">
-						dijit.byId('feedTree').checkInactiveFeeds();
-						dijit.byId('feedTree').checkErrorFeeds();
-					</script>
 				</div>
 			</div>
 		</div>
@@ -1111,7 +1097,7 @@ class Pref_Feeds extends Handler_Protected {
 			$title = Feeds::_get_title($feed_id, false);
 
 		if ($unread === false)
-			$unread = getFeedUnread($feed_id, false);
+			$unread = Feeds::_get_counters($feed_id, false, true);
 
 		return [
 			'id' => 'FEED:' . $feed_id,

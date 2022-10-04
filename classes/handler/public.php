@@ -76,7 +76,7 @@ class Handler_Public extends Handler {
 			"/public.php?op=rss&id=$feed&key=" .
 			Feeds::_get_access_key($feed, false, $owner_uid);
 
-		if (!$feed_site_url) $feed_site_url = get_self_url_prefix();
+		if (!$feed_site_url) $feed_site_url = Config::get_self_url();
 
 		if ($format == 'atom') {
 			$tpl = new Templator();
@@ -87,7 +87,7 @@ class Handler_Public extends Handler {
 			$tpl->setVariable('VERSION', Config::get_version(), true);
 			$tpl->setVariable('FEED_URL', htmlspecialchars($feed_self_url), true);
 
-			$tpl->setVariable('SELF_URL', htmlspecialchars(get_self_url_prefix()), true);
+			$tpl->setVariable('SELF_URL', htmlspecialchars(Config::get_self_url()), true);
 			while ($line = $result->fetch()) {
 
 				$line["content_preview"] = Sanitizer::sanitize(truncate_string(strip_tags($line["content"]), 100, '...'));
@@ -128,13 +128,13 @@ class Handler_Public extends Handler {
 				$tpl->setVariable('ARTICLE_CONTENT', $content, true);
 
 				$tpl->setVariable('ARTICLE_UPDATED_ATOM',
-					date('c', strtotime($line["updated"])), true);
+					date('c', strtotime($line["updated"] ?? '')), true);
 				$tpl->setVariable('ARTICLE_UPDATED_RFC822',
-					date(DATE_RFC822, strtotime($line["updated"])), true);
+					date(DATE_RFC822, strtotime($line["updated"] ?? '')), true);
 
 				$tpl->setVariable('ARTICLE_AUTHOR', htmlspecialchars($line['author']), true);
 
-				$tpl->setVariable('ARTICLE_SOURCE_LINK', htmlspecialchars($line['site_url'] ? $line["site_url"] : get_self_url_prefix()), true);
+				$tpl->setVariable('ARTICLE_SOURCE_LINK', htmlspecialchars($line['site_url'] ? $line["site_url"] : Config::get_self_url()), true);
 				$tpl->setVariable('ARTICLE_SOURCE_TITLE', htmlspecialchars($line['feed_title'] ?? $feed_title), true);
 
 				foreach ($line["tags"] as $tag) {
@@ -214,10 +214,15 @@ class Handler_Public extends Handler {
 				$article['title'] = $line['title'];
 				$article['excerpt'] = $line["content_preview"];
 				$article['content'] = Sanitizer::sanitize($line["content"], false, $owner_uid, $feed_site_url, null, $line["id"]);
-				$article['updated'] = date('c', strtotime($line["updated"]));
+				$article['updated'] = date('c', strtotime($line["updated"] ?? ''));
 
 				if (!empty($line['note'])) $article['note'] = $line['note'];
 				if (!empty($line['author'])) $article['author'] = $line['author'];
+
+				$article['source'] = [
+					'link' => $line['site_url'] ? $line["site_url"] : Config::get_self_url(),
+					'title' => $line['feed_title'] ?? $feed_title
+				];
 
 				if (count($line["tags"]) > 0) {
 					$article['tags'] = array();
@@ -312,7 +317,7 @@ class Handler_Public extends Handler {
 				$login, $user_id);
 
 			if (!$redirect_url)
-				$redirect_url = get_self_url_prefix() . "/index.php";
+				$redirect_url = Config::get_self_url() . "/index.php";
 
 			header("Location: " . $redirect_url);
 		} else {
@@ -389,11 +394,7 @@ class Handler_Public extends Handler {
 			if (UserHelper::authenticate($login, $password)) {
 				$_POST["password"] = "";
 
-				if (get_schema_version() >= 120) {
-					$_SESSION["language"] = get_pref(Prefs::USER_LANGUAGE, $_SESSION["uid"]);
-				}
-
-				$_SESSION["ref_schema_version"] = get_schema_version();
+				$_SESSION["ref_schema_version"] = Config::get_schema_version();
 				$_SESSION["bw_limit"] = !!clean($_POST["bw_limit"] ?? false);
 				$_SESSION["safe_mode"] = $safe_mode;
 
@@ -414,9 +415,7 @@ class Handler_Public extends Handler {
 				if (session_status() != PHP_SESSION_ACTIVE)
 					session_start();
 
-				if (!isset($_SESSION["login_error_msg"]))
-					$_SESSION["login_error_msg"] = __("Incorrect username or password");
-
+				$_SESSION["login_error_msg"] ??= __("Incorrect username or password");
 				$_SESSION["failed_login"] = $login;
 				user_error("Failed login attempt for $login from {$_SERVER['REMOTE_ADDR']}", E_USER_WARNING);
 			}
@@ -568,7 +567,7 @@ class Handler_Public extends Handler {
 					print_notice("Password reset instructions are being sent to your email address.");
 
 					$resetpass_token = sha1(get_random_bytes(128));
-					$resetpass_link = get_self_url_prefix() . "/public.php?op=forgotpass&hash=" . $resetpass_token .
+					$resetpass_link = Config::get_self_url() . "/public.php?op=forgotpass&hash=" . $resetpass_token .
 						"&login=" . urlencode($login);
 
 					$tpl = new Templator();
@@ -790,7 +789,7 @@ class Handler_Public extends Handler {
 		$plugin_name = basename(clean($_REQUEST["plugin"]));
 		$method = clean($_REQUEST["pmethod"]);
 
-		$host->load($plugin_name, PluginHost::KIND_USER, 0);
+		$host->load($plugin_name, PluginHost::KIND_ALL, 0);
 		//$host->load_data();
 
 		$plugin = $host->get_plugin($plugin_name);
@@ -812,7 +811,7 @@ class Handler_Public extends Handler {
 		} else {
 			user_error("PluginHandler[PUBLIC]: Requested method '$method' of unknown plugin '$plugin_name'.", E_USER_WARNING);
 			header("Content-Type: text/json");
-			print Errors::to_json(Errors::E_UNKNOWN_PLUGIN);
+			print Errors::to_json(Errors::E_UNKNOWN_PLUGIN, ['plugin' => $plugin_name]);
 		}
 	}
 

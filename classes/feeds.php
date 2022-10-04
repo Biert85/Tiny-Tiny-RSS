@@ -23,7 +23,7 @@ class Feeds extends Handler_Protected {
 	 */
 	private function _format_headlines_list($feed, string $method, string $view_mode, int $limit, bool $cat_view,
 					int $offset, string $override_order, bool $include_children, ?int $check_first_id = null,
-					bool $skip_first_id_check, string $order_by): array {
+					?bool $skip_first_id_check = false, ? string $order_by = ''): array {
 
 		$disable_cache = false;
 
@@ -122,7 +122,7 @@ class Feeds extends Handler_Protected {
 		$feed_title = $qfh_ret[1];
 		$feed_site_url = $qfh_ret[2];
 		$last_error = $qfh_ret[3];
-		$last_updated = strpos($qfh_ret[4], '1970-') === false ?
+		$last_updated = strpos($qfh_ret[4] ?? "", '1970-') === false ?
 			TimeHelper::make_local_datetime($qfh_ret[4], false) : __("Never");
 		$highlight_words = $qfh_ret[5];
 		$reply['first_id'] = $qfh_ret[6];
@@ -195,7 +195,11 @@ class Feeds extends Handler_Protected {
 				// frontend doesn't expect pdo returning booleans as strings on mysql
 				if (Config::get(Config::DB_TYPE) == "mysql") {
 					foreach (["unread", "marked", "published"] as $k) {
-						$line[$k] = $line[$k] === "1";
+						if (is_integer($line[$k])) {
+							$line[$k] = $line[$k] === 1;
+						} else {
+							$line[$k] = $line[$k] === "1";
+						}
 					}
 				}
 
@@ -244,11 +248,12 @@ class Feeds extends Handler_Protected {
 					function ($result, $plugin) use (&$line, &$button_doc) {
 						if ($result && $button_doc->loadXML($result)) {
 
-							/** @var DOMElement|null */
+							/** @var DOMElement|null $child */
 							$child = $button_doc->firstChild;
 
 							if ($child) {
 								do {
+									/** @var DOMElement|null $child */
 									$child->setAttribute('data-plugin-name', get_class($plugin));
 								} while ($child = $child->nextSibling);
 
@@ -267,11 +272,12 @@ class Feeds extends Handler_Protected {
 					function ($result, $plugin) use (&$line, &$button_doc) {
 						if ($result && $button_doc->loadXML($result)) {
 
-							/** @var DOMElement|null */
+							/** @var DOMElement|null $child */
 							$child = $button_doc->firstChild;
 
 							if ($child) {
 								do {
+									/** @var DOMElement|null $child */
 									$child->setAttribute('data-plugin-name', get_class($plugin));
 								} while ($child = $child->nextSibling);
 
@@ -661,7 +667,7 @@ class Feeds extends Handler_Protected {
 		}
 
 		Debug::set_enabled(true);
-		Debug::set_loglevel($xdebug);
+		Debug::set_loglevel((int)Debug::map_loglevel($xdebug));
 
 		$feed_id = (int)$_REQUEST["feed_id"];
 		$do_update = ($_REQUEST["action"] ?? "") == "do_update";
@@ -932,7 +938,15 @@ class Feeds extends Handler_Protected {
 		}
 	}
 
-	static function _get_counters(int $feed, bool $is_cat = false, bool $unread_only = false, ?int $owner_uid = null): int {
+	/**
+	 * @param int|string $feed feed id or tag name
+	 * @param bool $is_cat
+	 * @param bool $unread_only
+	 * @param null|int $owner_uid
+	 * @return int
+	 * @throws PDOException
+	 */
+	static function _get_counters($feed, bool $is_cat = false, bool $unread_only = false, ?int $owner_uid = null): int {
 
 		$n_feed = (int) $feed;
 		$need_entries = false;
@@ -951,8 +965,18 @@ class Feeds extends Handler_Protected {
 
 		if ($is_cat) {
 			return self::_get_cat_unread($n_feed, $owner_uid);
+		} else if(is_numeric($feed) && $feed < PLUGIN_FEED_BASE_INDEX && $feed > LABEL_BASE_INDEX) { // virtual Feed
+			$feed_id = PluginHost::feed_to_pfeed_id($feed);
+			$handler = PluginHost::getInstance()->get_feed_handler($feed_id);
+			if (implements_interface($handler, 'IVirtualFeed')) {
+				/** @var IVirtualFeed $handler */
+				return $handler->get_unread($feed_id);
+			} else {
+				return 0;
+			}
 		} else if ($n_feed == -6) {
 			return 0;
+		// tags
 		} else if ($feed != "0" && $n_feed == 0) {
 
 			$sth = $pdo->prepare("SELECT SUM((SELECT COUNT(int_id)
@@ -1494,7 +1518,7 @@ class Feeds extends Handler_Protected {
 				$view_query_part = " ";
 			} else if ($feed != -1) {
 
-				$unread = getFeedUnread($feed, $cat_view);
+				$unread = Feeds::_get_counters($feed, $cat_view, true);
 
 				if ($cat_view && $feed > 0 && $include_children)
 					$unread += self::_get_cat_children_unread($feed);
@@ -1923,8 +1947,8 @@ class Feeds extends Handler_Protected {
 		$sth->execute([$cat, $owner_uid]);
 
 		while ($line = $sth->fetch()) {
-			array_push($rv, (int)$line["parent_cat"]);
-			$rv = array_merge($rv, self::_get_parent_cats($line["parent_cat"], $owner_uid));
+			$cat = (int) $line["parent_cat"];
+			array_push($rv, $cat, ...self::_get_parent_cats($cat, $owner_uid));
 		}
 
 		return $rv;
@@ -1943,8 +1967,7 @@ class Feeds extends Handler_Protected {
 		$sth->execute([$cat, $owner_uid]);
 
 		while ($line = $sth->fetch()) {
-			array_push($rv, $line["id"]);
-			$rv = array_merge($rv, self::_get_child_cats($line["id"], $owner_uid));
+			array_push($rv, $line["id"], ...self::_get_child_cats($line["id"], $owner_uid));
 		}
 
 		return $rv;
@@ -1965,16 +1988,18 @@ class Feeds extends Handler_Protected {
 		$sth = $pdo->prepare("SELECT DISTINCT cat_id, fc.parent_cat FROM ttrss_feeds f LEFT JOIN ttrss_feed_categories fc
 				ON (fc.id = f.cat_id)
 				WHERE f.owner_uid = ? AND f.id IN ($feeds_qmarks)");
-		$sth->execute(array_merge([$owner_uid], $feeds));
+		$sth->execute([$owner_uid, ...$feeds]);
 
 		$rv = [];
 
 		if ($row = $sth->fetch()) {
+			$cat_id = (int) $row["cat_id"];
+			$rv[] = $cat_id;
 			array_push($rv, (int)$row["cat_id"]);
 
-			if ($with_parents && $row["parent_cat"])
-				$rv = array_merge($rv,
-							self::_get_parent_cats($row["cat_id"], $owner_uid));
+			if ($with_parents && $row["parent_cat"]) {
+				array_push($rv, ...self::_get_parent_cats($cat_id, $owner_uid));
+			}
 		}
 
 		$rv = array_unique($rv);
@@ -2344,8 +2369,11 @@ class Feeds extends Handler_Protected {
 							$k = mb_strtolower($k);
 							array_push($search_query_leftover, $not ? "!$k" : $k);
 						} else {
-							array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
-								OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
+							$k = mb_strtolower($k);
+							array_push($search_query_leftover, $not ? "-$k" : $k);
+
+							//array_push($query_keywords, "(UPPER(ttrss_entries.title) $not LIKE UPPER(".$pdo->quote("%$k%").")
+							//	OR UPPER(ttrss_entries.content) $not LIKE UPPER(".$pdo->quote("%$k%")."))");
 						}
 
 						if (!$not) array_push($search_words, $k);
@@ -2367,12 +2395,16 @@ class Feeds extends Handler_Protected {
 
 				array_push($query_keywords,
 					"(tsvector_combined @@ to_tsquery($search_language, $tsquery))");
-			}
+			} else {
+				$ft_query = $pdo->quote(implode(" ", $search_query_leftover));
 
+				array_push($query_keywords,
+					"MATCH (ttrss_entries.title, ttrss_entries.content) AGAINST ($ft_query IN BOOLEAN MODE)");
+			}
 		}
 
 		if (count($query_keywords) > 0)
-			$search_query_part = implode("AND", $query_keywords);
+			$search_query_part = implode("AND ", $query_keywords);
 		else
 			$search_query_part = "false";
 

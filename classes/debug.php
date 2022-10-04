@@ -12,44 +12,31 @@ class Debug {
 		Debug::LOG_EXTENDED,
 	];
 
-	// TODO: class properties can be switched to PHP typing if/when the minimum PHP_VERSION is raised to 7.4.0+
 	/**
 	 * @deprecated
-	 * @var int
 	*/
-	public static $LOG_DISABLED = self::LOG_DISABLED;
+	public static int $LOG_DISABLED = self::LOG_DISABLED;
 
 	/**
 	 * @deprecated
-	 * @var int
 	*/
-	public static $LOG_NORMAL = self::LOG_NORMAL;
+	public static int $LOG_NORMAL = self::LOG_NORMAL;
 
 	/**
 	 * @deprecated
-	 * @var int
 	*/
-	public static $LOG_VERBOSE = self::LOG_VERBOSE;
+	public static int $LOG_VERBOSE = self::LOG_VERBOSE;
 
 	/**
 	 * @deprecated
-	 * @var int
 	*/
-	public static $LOG_EXTENDED = self::LOG_EXTENDED;
+	public static int $LOG_EXTENDED = self::LOG_EXTENDED;
 
-	/** @var bool */
-	private static $enabled = false;
+	private static bool $enabled = false;
+	private static bool $quiet = false;
+	private static ?string $logfile = null;
 
-	/** @var bool */
-	private static $quiet = false;
-
-	/** @var string|null */
-	private static $logfile = null;
-
-	/**
-	 * @var int Debug::LOG_*
-	 */
-    private static $loglevel = self::LOG_NORMAL;
+	private static int $loglevel = self::LOG_NORMAL;
 
 	public static function set_logfile(string $logfile): void {
         self::$logfile = $logfile;
@@ -68,7 +55,7 @@ class Debug {
     }
 
 	/**
-	 * @param int $level Debug::LOG_*
+	 * @param Debug::LOG_* $level
 	 */
     public static function set_loglevel(int $level): void {
         self::$loglevel = $level;
@@ -82,13 +69,27 @@ class Debug {
     }
 
 	/**
-	 * @param int $level Debug::LOG_*
+	 * @param int $level integer loglevel value
+	 * @return Debug::LOG_* if valid, warn and return LOG_DISABLED otherwise
+	 */
+	public static function map_loglevel(int $level) : int {
+		if (in_array($level, self::ALL_LOG_LEVELS)) {
+			/** @phpstan-ignore-next-line */
+			return $level;
+		} else {
+			user_error("Passed invalid debug log level: $level", E_USER_WARNING);
+			return self::LOG_DISABLED;
+		}
+	}
+
+	/**
+	 * @param Debug::LOG_* $level log level
 	 */
     public static function log(string $message, int $level = Debug::LOG_NORMAL): bool {
 
         if (!self::$enabled || self::$loglevel < $level) return false;
 
-        $ts = strftime("%H:%M:%S", time());
+        $ts = date("H:i:s", time());
         if (function_exists('posix_getpid')) {
             $ts = "$ts/" . posix_getpid();
         }
