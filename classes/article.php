@@ -293,6 +293,7 @@ class Article extends Handler_Protected {
 	}
 
 	/**
+	 * @param int $id article id
 	 * @return array{'formatted': string, 'entries': array<int, array<string, mixed>>}
 	 */
 	static function _format_enclosures(int $id, bool $always_display_enclosures, string $article_content, bool $hide_images = false): array {
@@ -446,7 +447,7 @@ class Article extends Handler_Protected {
 
 		$rv = [];
 
-		$cache = new DiskCache("images");
+		$cache = DiskCache::instance("images");
 
 		foreach ($encs as $enc) {
 			$cache_key = sha1($enc->content_url);
@@ -639,7 +640,7 @@ class Article extends Handler_Protected {
 				$article_stream = UrlHelper::rewrite_relative($site_url, $article_stream);
 		}
 
-		$cache = new DiskCache("images");
+		$cache = DiskCache::instance("images");
 
 		if ($article_image && $cache->exists(sha1($article_image)))
 			$article_image = $cache->get_url(sha1($article_image));

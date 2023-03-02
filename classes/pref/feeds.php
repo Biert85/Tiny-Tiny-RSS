@@ -373,7 +373,7 @@ class Pref_Feeds extends Handler_Protected {
 
 		$order_id = 1;
 
-		$cat = $data_map[$item_id];
+		$cat = ($data_map[$item_id] ?? false);
 
 		if ($cat && is_array($cat)) {
 			foreach ($cat as $item) {
@@ -436,7 +436,7 @@ class Pref_Feeds extends Handler_Protected {
 			foreach ($data['items'] as $item) {
 
 #				if ($item['id'] != 'root') {
-					if (is_array($item['items'])) {
+					if (is_array($item['items'] ?? false)) {
 						if (isset($item['items']['_reference'])) {
 							$data_map[$item['id']] = array($item['items']);
 						} else {
@@ -454,14 +454,15 @@ class Pref_Feeds extends Handler_Protected {
 
 	function removeIcon(): void {
 		$feed_id = (int) $_REQUEST["feed_id"];
-		$icon_file = Config::get(Config::ICONS_DIR) . "/$feed_id.ico";
+
+		$cache = DiskCache::instance('feed-icons');
 
 		$feed = ORM::for_table('ttrss_feeds')
 			->where('owner_uid', $_SESSION['uid'])
 			->find_one($feed_id);
 
-		if ($feed && file_exists($icon_file)) {
-			if (unlink($icon_file)) {
+		if ($feed && $cache->exists((string)$feed_id)) {
+			if ($cache->remove((string)$feed_id)) {
 				$feed->set([
 					'favicon_avg_color' => null,
 					'favicon_last_checked' => '1970-01-01',
@@ -486,24 +487,25 @@ class Pref_Feeds extends Handler_Protected {
 		if ($feed && $tmp_file && move_uploaded_file($_FILES['icon_file']['tmp_name'], $tmp_file)) {
 			if (filesize($tmp_file) < Config::get(Config::MAX_FAVICON_FILE_SIZE)) {
 
-				$new_filename = Config::get(Config::ICONS_DIR) . "/$feed_id.ico";
+				$cache = DiskCache::instance('feed-icons');
 
-				if (file_exists($new_filename)) unlink($new_filename);
-					if (rename($tmp_file, $new_filename)) {
-						chmod($new_filename, 0644);
+				if ($cache->put((string)$feed_id, file_get_contents($tmp_file))) {
 
-						$feed->set([
-							'favicon_avg_color' => null,
-							'favicon_is_custom' => true,
-						]);
+					$feed->set([
+						'favicon_avg_color' => null,
+						'favicon_is_custom' => true,
+					]);
 
-						if ($feed->save()) {
-							$rc = self::E_ICON_UPLOAD_SUCCESS;
-						}
-
-					} else {
-						$rc = self::E_ICON_RENAME_FAILED;
+					if ($feed->save()) {
+						$rc = self::E_ICON_UPLOAD_SUCCESS;
 					}
+
+				} else {
+					$rc = self::E_ICON_RENAME_FAILED;
+				}
+
+				@unlink($tmp_file);
+
 			} else {
 				$rc = self::E_ICON_FILE_TOO_LARGE;
 			}
@@ -512,7 +514,8 @@ class Pref_Feeds extends Handler_Protected {
 		if (file_exists($tmp_file))
 			unlink($tmp_file);
 
-		print json_encode(['rc' => $rc, 'icon_url' => Feeds::_get_icon($feed_id)]);
+		print json_encode(['rc' => $rc, 'icon_url' =>
+			Feeds::_get_icon($feed_id) . "?ts=" . time() ]);
 	}
 
 	function editfeed(): void {
@@ -700,28 +703,22 @@ class Pref_Feeds extends Handler_Protected {
 
 	private function editsaveops(bool $batch): void {
 
-		$feed_title = clean($_POST["title"]);
-		$feed_url = clean($_POST["feed_url"]);
-		$site_url = clean($_POST["site_url"]);
+		$feed_title = clean($_POST["title"] ?? "");
+		$feed_url = clean($_POST["feed_url"] ?? "");
+		$site_url = clean($_POST["site_url"] ?? "");
 		$upd_intl = (int) clean($_POST["update_interval"] ?? 0);
 		$purge_intl = (int) clean($_POST["purge_interval"] ?? 0);
 		$feed_id = (int) clean($_POST["id"] ?? 0); /* editSave */
 		$feed_ids = explode(",", clean($_POST["ids"] ?? "")); /* batchEditSave */
 		$cat_id = (int) clean($_POST["cat_id"] ?? 0);
-		$auth_login = clean($_POST["auth_login"]);
-		$auth_pass = clean($_POST["auth_pass"]);
-		$private = checkbox_to_sql_bool(clean($_POST["private"] ?? ""));
-		$include_in_digest = checkbox_to_sql_bool(
-			clean($_POST["include_in_digest"] ?? ""));
-		$cache_images = checkbox_to_sql_bool(
-			clean($_POST["cache_images"] ?? ""));
-		$hide_images = checkbox_to_sql_bool(
-			clean($_POST["hide_images"] ?? ""));
-		$always_display_enclosures = checkbox_to_sql_bool(
-			clean($_POST["always_display_enclosures"] ?? ""));
-
-		$mark_unread_on_update = checkbox_to_sql_bool(
-			clean($_POST["mark_unread_on_update"] ?? ""));
+		$auth_login = clean($_POST["auth_login"] ?? "");
+		$auth_pass = clean($_POST["auth_pass"] ?? "");
+		$private = checkbox_to_sql_bool($_POST["private"] ?? "");
+		$include_in_digest = checkbox_to_sql_bool($_POST["include_in_digest"] ?? "");
+		$cache_images = checkbox_to_sql_bool($_POST["cache_images"] ?? "");
+		$hide_images = checkbox_to_sql_bool($_POST["hide_images"] ?? "");
+		$always_display_enclosures = checkbox_to_sql_bool($_POST["always_display_enclosures"] ?? "");
+		$mark_unread_on_update = checkbox_to_sql_bool($_POST["mark_unread_on_update"] ?? "");
 
 		$feed_language = clean($_POST["feed_language"] ?? "");
 
@@ -776,71 +773,79 @@ class Pref_Feeds extends Handler_Protected {
 			foreach (array_keys($feed_data) as $k) {
 
 				$qpart = "";
+				$qparams = [];
 
 				switch ($k) {
 					case "title":
-						$qpart = "title = " . $this->pdo->quote($feed_title);
+						$qpart = "title = ?";
+						$qparams = [$feed_title];
 						break;
 
 					case "feed_url":
-						$qpart = "feed_url = " . $this->pdo->quote($feed_url);
+						$qpart = "feed_url = ?";
+						$qparams = [$this->pdo->quote($feed_url)];
 						break;
 
 					case "update_interval":
-						$qpart = "update_interval = " . $upd_intl; // made int above
+						$qpart = "update_interval = ?";
+						$qparams = [$upd_intl];
 						break;
 
 					case "purge_interval":
-						$qpart = "purge_interval = " . $purge_intl; // made int above
+						$qpart = "purge_interval = ?";
+						$qparams = [$purge_intl];
 						break;
 
 					case "auth_login":
-						$qpart = "auth_login = " . $this->pdo->quote($auth_login);
+						$qpart = "auth_login = ?";
+						$qparams = [$auth_login];
 						break;
 
 					case "auth_pass":
-						$qpart = "auth_pass =" . $this->pdo->quote($auth_pass). ", auth_pass_encrypted = false";
+						$qpart = "auth_pass = ?, auth_pass_encrypted = false";
+						$qparams = [$auth_pass];
 						break;
 
 					case "private":
-						$qpart = "private = " . $private; // made int above
+						$qpart = "private = ?";
+						$qparams = [$private];
 						break;
 
 					case "include_in_digest":
-						$qpart = "include_in_digest = " . $include_in_digest; // made int above
+						$qpart = "include_in_digest = ?";
+						$qparams = [$include_in_digest];
 						break;
 
 					case "always_display_enclosures":
-						$qpart = "always_display_enclosures = " . $always_display_enclosures; // made int above
+						$qpart = "always_display_enclosures = ?";
+						$qparams = [$always_display_enclosures];
 						break;
 
 					case "mark_unread_on_update":
-						$qpart = "mark_unread_on_update = " . $mark_unread_on_update; // made int above
+						$qpart = "mark_unread_on_update = ?";
+						$qparams = [$mark_unread_on_update];
 						break;
 
 					case "cache_images":
-						$qpart = "cache_images = " . $cache_images; // made int above
+						$qpart = "cache_images = ?";
+						$qparams = [$cache_images];
 						break;
 
 					case "hide_images":
-						$qpart = "hide_images = " . $hide_images; // made int above
+						$qpart = "hide_images = ?";
+						$qparams = [$hide_images];
 						break;
 
 					case "cat_id":
 						if (get_pref(Prefs::ENABLE_FEED_CATS)) {
-							if ($cat_id) {
-								$qpart = "cat_id = " . $cat_id; // made int above
-							} else {
-								$qpart = 'cat_id = NULL';
-							}
-						} else {
-							$qpart = "";
+							$qpart = "cat_id = ?";
+							$qparams = $cat_id ? [$cat_id] : [null];
 						}
-
 						break;
 
 					case "feed_language":
-						$qpart = "feed_language = " . $this->pdo->quote($feed_language);
+						$qpart = "feed_language = ?";
+						$qparams = [$this->pdo->quote($feed_language)];
 						break;
 
 				}
@@ -848,7 +853,7 @@ class Pref_Feeds extends Handler_Protected {
 				if ($qpart) {
 					$sth = $this->pdo->prepare("UPDATE ttrss_feeds SET $qpart WHERE id IN ($feed_ids_qmarks)
 						AND owner_uid = ?");
-					$sth->execute([...$feed_ids, $_SESSION['uid']]);
+					$sth->execute([...$qparams, ...$feed_ids, $_SESSION['uid']]);
 				}
 			}
 
@@ -1151,6 +1156,7 @@ class Pref_Feeds extends Handler_Protected {
 			->select_many('id', 'title', 'feed_url', 'last_error', 'site_url')
 			->where_not_equal('last_error', '')
 			->where('owner_uid', $_SESSION['uid'])
+			->where_gte('update_interval', 0)
 			->find_array());
 	}
 
@@ -1186,9 +1192,10 @@ class Pref_Feeds extends Handler_Protected {
 
 			$pdo->commit();
 
-			if (file_exists(Config::get(Config::ICONS_DIR) . "/$id.ico")) {
-				unlink(Config::get(Config::ICONS_DIR) . "/$id.ico");
-			}
+			$favicon_cache = DiskCache::instance('feed-icons');
+
+			if ($favicon_cache->exists((string)$id))
+				$favicon_cache->remove((string)$id);
 
 		} else {
 			Labels::remove(Labels::feed_to_label_id($id), $owner_uid);

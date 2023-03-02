@@ -299,6 +299,13 @@ class Config {
 		return self::get_instance()->_get_version($as_string);
 	}
 
+	// returns version showing (if possible) full timestamp of commit id
+	static function get_version_html() : string {
+		$version = self::get_version(false);
+
+		return sprintf("<span title=\"%s\">%s</span>", date("Y-m-d H:i:s", ($version['timestamp'] ?? 0)), $version['version']);
+	}
+
 	/**
 	 * @return array<string, mixed>|string
 	 */
@@ -363,7 +370,7 @@ class Config {
 
 			if ($check == "version") {
 
-				$rv["version"] = date("y.m", (int)$timestamp) . "-$commit";
+				$rv["version"] = sprintf("%s-%s", date("y.m", (int)$timestamp), $commit);
 				$rv["commit"] = $commit;
 				$rv["timestamp"] = $timestamp;
 
@@ -448,13 +455,7 @@ class Config {
 
 	/** this returns Config::SELF_URL_PATH sans trailing slash */
 	static function get_self_url() : string {
-		$self_url_path = self::get(Config::SELF_URL_PATH);
-
-		if (substr($self_url_path, -1) === "/") {
-			return substr($self_url_path, 0, -1);
-		} else {
-			return $self_url_path;
-		}
+		return preg_replace("#/*$#", "", self::get(Config::SELF_URL_PATH));
 	}
 
 	static function is_server_https() : bool {
@@ -538,6 +539,10 @@ class Config {
 
 			if (!function_exists("json_encode")) {
 				array_push($errors, "PHP support for JSON is required, but was not found.");
+			}
+
+			if (!function_exists("flock")) {
+				array_push($errors, "PHP support for flock() function is required.");
 			}
 
 			if (!class_exists("PDO")) {

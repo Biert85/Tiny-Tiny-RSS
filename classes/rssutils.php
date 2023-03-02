@@ -37,20 +37,29 @@ class RSSUtils {
 		$pdo = Db::pdo();
 		$sth = $pdo->prepare("SELECT id FROM ttrss_feeds WHERE id = ?");
 
-		// check icon files once every Config::get(Config::CACHE_MAX_DAYS) days
-		$icon_files = array_filter(glob(Config::get(Config::ICONS_DIR) . "/*.ico"),
-			fn(string $f) => filemtime($f) < time() - 86400 * Config::get(Config::CACHE_MAX_DAYS));
+		$cache = DiskCache::instance('feed-icons');
 
-		foreach ($icon_files as $icon) {
-			$feed_id = basename($icon, ".ico");
+		if ($cache->is_writable()) {
+			$dh = opendir($cache->get_full_path(""));
 
-			$sth->execute([$feed_id]);
+			if ($dh) {
+				while (($icon = readdir($dh)) !== false) {
+					if (preg_match('/^[0-9]{1,}$/', $icon) && $cache->get_mtime($icon) < time() - 86400 * Config::get(Config::CACHE_MAX_DAYS)) {
 
-			if ($sth->fetch()) {
-				@touch($icon);
-			} else {
-				Debug::log("Removing orphaned feed icon: $icon");
-				unlink($icon);
+						$sth->execute([(int)$icon]);
+
+						if ($sth->fetch()) {
+							$cache->put($icon, $cache->get($icon));
+						} else {
+							$icon_path = $cache->get_full_path($icon);
+
+							Debug::log("Removing orphaned feed icon: $icon_path");
+							unlink($icon_path);
+						}
+					}
+				}
+
+				closedir($dh);
 			}
 		}
 	}
@@ -307,14 +316,20 @@ class RSSUtils {
 
 				$feed_data = trim($feed_data);
 
-				$rss = new FeedParser($feed_data);
-				$rss->init();
+				if ($feed_data) {
+					$rss = new FeedParser($feed_data);
+					$rss->init();
 
-				if (!$rss->error()) {
-					$basic_info = [
-						'title' => mb_substr(clean($rss->get_title()), 0, 199),
-						'site_url' => mb_substr(UrlHelper::rewrite_relative($feed->feed_url, clean($rss->get_link())), 0, 245),
-					];
+					if (!$rss->error()) {
+						$basic_info = [
+							'title' => mb_substr(clean($rss->get_title()), 0, 199),
+							'site_url' => mb_substr(UrlHelper::rewrite_relative($feed->feed_url, clean($rss->get_link())), 0, 245),
+						];
+					} else {
+						Debug::log(sprintf("unable to parse feed for basic info: %s", $rss->error()), Debug::LOG_VERBOSE);
+					}
+				} else {
+					Debug::log(sprintf("unable to fetch feed for basic info: %s [%s]", UrlHelper::$fetch_last_error, UrlHelper::$fetch_last_error_code), Debug::LOG_VERBOSE);
 				}
 			}
 
@@ -337,6 +352,9 @@ class RSSUtils {
 		Debug::log("start", Debug::LOG_VERBOSE);
 
 		$pdo = Db::pdo();
+
+		/** @var DiskCache $cache */
+		$cache = DiskCache::instance('feeds');
 
 		if (Config::get(Config::DB_TYPE) == "pgsql") {
 			$favicon_interval_qpart = "favicon_last_checked < NOW() - INTERVAL '12 hour'";
@@ -387,7 +405,7 @@ class RSSUtils {
 
 		$date_feed_processed = date('Y-m-d H:i');
 
-		$cache_filename = Config::get(Config::CACHE_DIR) . "/feeds/" . sha1($feed_obj->feed_url) . ".xml";
+		$cache_filename = sha1($feed_obj->feed_url) . ".xml";
 
 		$pluginhost = new PluginHost();
 		$user_plugins = get_pref(Prefs::_ENABLED_PLUGINS, $feed_obj->owner_uid);
@@ -423,13 +441,13 @@ class RSSUtils {
 
 		// try cache
 		if (!$feed_data &&
-			is_readable($cache_filename) &&
+			$cache->exists($cache_filename) &&
 			!$feed_obj->auth_login && !$feed_obj->auth_pass &&
-			filemtime($cache_filename) > time() - 30) {
+			$cache->get_mtime($cache_filename) > time() - 30) {
 
 			Debug::log("using local cache: {$cache_filename}.", Debug::LOG_VERBOSE);
 
-			$feed_data = file_get_contents($cache_filename);
+			$feed_data = $cache->get($cache_filename);
 
 			if ($feed_data) {
 				$rss_hash = sha1($feed_data);
@@ -477,12 +495,12 @@ class RSSUtils {
 			}
 
 			// cache vanilla feed data for re-use
-			if ($feed_data && !$feed_obj->auth_pass && !$feed_obj->auth_login && is_writable(Config::get(Config::CACHE_DIR) . "/feeds")) {
+			if ($feed_data && !$feed_obj->auth_pass && !$feed_obj->auth_login && $cache->is_writable()) {
 				$new_rss_hash = sha1($feed_data);
 
 				if ($new_rss_hash != $rss_hash) {
 					Debug::log("saving to local cache: $cache_filename", Debug::LOG_VERBOSE);
-					file_put_contents($cache_filename, $feed_data);
+					$cache->put($cache_filename, $feed_data);
 				}
 			}
 		}
@@ -585,26 +603,36 @@ class RSSUtils {
 			Debug::log("site_url: {$feed_obj->site_url}", Debug::LOG_VERBOSE);
 			Debug::log("feed_title: {$rss->get_title()}", Debug::LOG_VERBOSE);
 
-			Debug::log("favicon: needs check: {$feed_obj->favicon_needs_check} is custom: {$feed_obj->favicon_is_custom} avg color: {$feed_obj->favicon_avg_color}",
+			Debug::log('favicon: needs check: ' . ($feed_obj->favicon_needs_check ? 'true' : 'false')
+				. ', is custom: ' . ($feed_obj->favicon_is_custom ? 'true' : 'false')
+				. ", avg color: {$feed_obj->favicon_avg_color}",
 				Debug::LOG_VERBOSE);
 
-			if ($feed_obj->favicon_needs_check || $force_refetch) {
+			if ($feed_obj->favicon_needs_check || $force_refetch
+				|| ($feed_obj->favicon_is_custom && !$feed_obj->favicon_avg_color)) {
 
-				/* terrible hack: if we crash on floicon shit here, we won't check
-				 * the icon avgcolor again (unless the icon got updated) */
+				// restrict update attempts to once per 12h
+				$feed_obj->favicon_last_checked = Db::NOW();
+				$feed_obj->save();
 
-				$favicon_file = Config::get(Config::ICONS_DIR) . "/$feed.ico";
-				$favicon_modified = file_exists($favicon_file) ? filemtime($favicon_file) : -1;
+				$favicon_cache = DiskCache::instance('feed-icons');
 
+				$favicon_modified = $favicon_cache->exists($feed) ? $favicon_cache->get_mtime($feed) : -1;
+
+				// don't try to redownload custom favicons
 				if (!$feed_obj->favicon_is_custom) {
 					Debug::log("favicon: trying to update favicon...", Debug::LOG_VERBOSE);
 					self::update_favicon($feed_obj->site_url, $feed);
 
-					if ((file_exists($favicon_file) ? filemtime($favicon_file) : -1) > $favicon_modified)
+					if (!$favicon_cache->exists($feed) || $favicon_cache->get_mtime($feed) > $favicon_modified) {
 						$feed_obj->favicon_avg_color = null;
+						$feed_obj->save();
+					}
 				}
 
-				if (is_readable($favicon_file) && function_exists("imagecreatefromstring") && empty($feed_obj->favicon_avg_color)) {
+				/* terrible hack: if we crash on floicon shit here, we won't check
+				 * the icon avgcolor again (unless icon got updated) */
+				if (file_exists($favicon_cache->get_full_path($feed)) && function_exists("imagecreatefromstring") && empty($feed_obj->favicon_avg_color)) {
 					require_once "colors.php";
 
 					Debug::log("favicon: trying to calculate average color...", Debug::LOG_VERBOSE);
@@ -612,13 +640,16 @@ class RSSUtils {
 					$feed_obj->favicon_avg_color = 'fail';
 					$feed_obj->save();
 
-					$feed_obj->favicon_avg_color = \Colors\calculate_avg_color($favicon_file);
-					$feed_obj->save();
+					$calculated_avg_color = \Colors\calculate_avg_color($favicon_cache->get_full_path($feed));
+					if ($calculated_avg_color) {
+						$feed_obj->favicon_avg_color = $calculated_avg_color;
+						$feed_obj->save();
+					}
 
-					Debug::log("favicon: avg color: {$feed_obj->favicon_avg_color}", Debug::LOG_VERBOSE);
+					Debug::log("favicon: calculated avg color: {$calculated_avg_color}, setting avg color: {$feed_obj->favicon_avg_color}", Debug::LOG_VERBOSE);
 
 				} else if ($feed_obj->favicon_avg_color == 'fail') {
-					Debug::log("floicon failed $favicon_file, not trying to recalculate avg color", Debug::LOG_VERBOSE);
+					Debug::log("floicon failed on $feed or a suitable avg color couldn't be determined, not trying to recalculate avg color", Debug::LOG_VERBOSE);
 				}
 			}
 
@@ -1301,7 +1332,7 @@ class RSSUtils {
 	 * @see FeedEnclosure
 	 */
 	static function cache_enclosures(array $enclosures, string $site_url): void {
-		$cache = new DiskCache("images");
+		$cache = DiskCache::instance("images");
 
 		if ($cache->is_writable()) {
 			foreach ($enclosures as $enc) {
@@ -1323,8 +1354,6 @@ class RSSUtils {
 						} else {
 							Debug::log("cache_enclosures: failed with ".UrlHelper::$fetch_last_error_code.": ".UrlHelper::$fetch_last_error);
 						}
-					} else if (is_writable($local_filename)) {
-						$cache->touch($local_filename);
 					}
 				}
 			}
@@ -1350,14 +1379,12 @@ class RSSUtils {
 			} else {
 				Debug::log("cache_media: failed with ".UrlHelper::$fetch_last_error_code.": ".UrlHelper::$fetch_last_error);
 			}
-		} else if ($cache->is_writable($local_filename)) {
-			$cache->touch($local_filename);
 		}
 	}
 
 	/* TODO: move to DiskCache? */
 	static function cache_media(string $html, string $site_url): void {
-		$cache = new DiskCache("images");
+		$cache = DiskCache::instance("images");
 
 		if ($html && $cache->is_writable()) {
 			$doc = new DOMDocument();
@@ -1673,9 +1700,36 @@ class RSSUtils {
 		$tmph->run_hooks(PluginHost::HOOK_HOUSE_KEEPING);
 	}
 
-	static function housekeeping_common(): void {
-		DiskCache::expire();
+	/** migrates favicons from legacy storage in feed-icons/ to cache/feed-icons/using new naming (sans .ico suffix) */
+	static function migrate_feed_icons() : void {
+		$old_dir = Config::get(Config::ICONS_DIR);
+		$new_dir = Config::get(Config::CACHE_DIR) . '/feed-icons';
 
+		$dh = opendir($old_dir);
+
+		$cache = DiskCache::instance('feed-icons');
+
+		if ($dh) {
+			while (($old_filename = readdir($dh)) !== false) {
+				if (strpos($old_filename, ".ico") !== false) {
+					$new_filename = str_replace(".ico", "", $old_filename);
+					$old_full_path = "$old_dir/$old_filename";
+
+					if (is_file($old_full_path) && $cache->put($new_filename, file_get_contents($old_full_path))) {
+						unlink($old_full_path);
+					}
+				}
+			}
+
+			closedir($dh);
+		}
+	}
+
+	static function housekeeping_common(): void {
+		$cache = DiskCache::instance("");
+		$cache->expire_all();
+
+		self::migrate_feed_icons();
 		self::expire_lock_files();
 		self::expire_error_log();
 		self::expire_feed_archive();
@@ -1693,8 +1747,6 @@ class RSSUtils {
 	 * @return false|string
 	 */
 	static function update_favicon(string $site_url, int $feed) {
-		$icon_file = Config::get(Config::ICONS_DIR) . "/$feed.ico";
-
 		$favicon_urls = self::get_favicon_urls($site_url);
 
 		if (count($favicon_urls) == 0) {
@@ -1749,21 +1801,18 @@ class RSSUtils {
 				break;
 			}
 
-			Debug::log("favicon: $favicon_url looks valid, saving to $icon_file", Debug::LOG_VERBOSE);
+			$favicon_cache = DiskCache::instance('feed-icons');
 
-			$fp = @fopen($icon_file, "w");
+			if ($favicon_cache->is_writable()) {
+				Debug::log("favicon: $favicon_url looks valid, saving to cache", Debug::LOG_VERBOSE);
 
-			if ($fp) {
+				// we deal with this manually
+				if (!$favicon_cache->exists(".no-auto-expiry"))
+					$favicon_cache->put(".no-auto-expiry", "");
 
-				fwrite($fp, $contents);
-				fclose($fp);
-				chmod($icon_file, 0644);
-				clearstatcache();
-
-				return $icon_file;
-
+				return $favicon_cache->put((string)$feed, $contents);
 			} else {
-				Debug::log("favicon: failed to open $icon_file for writing", Debug::LOG_VERBOSE);
+				Debug::log("favicon: $favicon_url skipping, local cache is not writable", Debug::LOG_VERBOSE);
 			}
 		}
 

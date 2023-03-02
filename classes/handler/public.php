@@ -381,7 +381,7 @@ class Handler_Public extends Handler {
 			$login = clean($_POST["login"]);
 			$password = clean($_POST["password"]);
 			$remember_me = clean($_POST["remember_me"] ?? false);
-			$safe_mode = checkbox_to_sql_bool(clean($_POST["safe_mode"] ?? false));
+			$safe_mode = checkbox_to_sql_bool($_POST["safe_mode"] ?? false);
 
 			if (session_status() != PHP_SESSION_ACTIVE) {
 				if ($remember_me) {
@@ -422,7 +422,7 @@ class Handler_Public extends Handler {
 
 			$return = clean($_REQUEST['return']);
 
-			if ($_REQUEST['return'] && mb_strpos($return, Config::get(Config::SELF_URL_PATH)) === 0) {
+			if ($_REQUEST['return'] && mb_strpos($return, Config::get_self_url()) === 0) {
 				header("Location: " . clean($_REQUEST['return']));
 			} else {
 				header("Location: " . Config::get_self_url());
@@ -455,6 +455,7 @@ class Handler_Public extends Handler {
 				echo javascript_tag("lib/dojo/dojo.js");
 				echo javascript_tag("lib/dojo/tt-rss-layer.js");
 			?>
+			<?= Config::get_override_links() ?>
 		</head>
 		<body class='flat ttrss_utility'>
 		<div class='container'>
@@ -576,7 +577,7 @@ class Handler_Public extends Handler {
 
 					$tpl->setVariable('LOGIN', $login);
 					$tpl->setVariable('RESETPASS_LINK', $resetpass_link);
-					$tpl->setVariable('TTRSS_HOST', Config::get(Config::SELF_URL_PATH));
+					$tpl->setVariable('TTRSS_HOST', Config::get_self_url());
 
 					$tpl->addBlock('message');
 
@@ -763,10 +764,22 @@ class Handler_Public extends Handler {
 		// we do not allow files with extensions at the moment
 		$filename = str_replace(".", "", $filename);
 
-		$cache = new DiskCache($cache_dir);
+		$cache = DiskCache::instance($cache_dir);
 
 		if ($cache->exists($filename)) {
 			$cache->send($filename);
+		} else {
+			header($_SERVER["SERVER_PROTOCOL"]." 404 Not Found");
+			echo "File not found.";
+		}
+	}
+
+	function feed_icon() : void {
+		$id = (int)$_REQUEST['id'];
+		$cache = DiskCache::instance('feed-icons');
+
+		if ($cache->exists((string)$id)) {
+			$cache->send((string)$id);
 		} else {
 			header($_SERVER["SERVER_PROTOCOL"]." 404 Not Found");
 			echo "File not found.";

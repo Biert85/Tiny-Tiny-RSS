@@ -76,6 +76,7 @@ class Auth_Internal extends Auth_Base {
 										},
 									};
 								</script>
+								<?= Config::get_override_links() ?>
 							</head>
 							<body class="flat ttrss_utility otp css_loading">
 								<h1><?= __("Authentication") ?></h1>
@@ -224,7 +225,7 @@ class Auth_Internal extends Auth_Base {
 				$tpl->readTemplateFromFile("password_change_template.txt");
 
 				$tpl->setVariable('LOGIN', $user->login);
-				$tpl->setVariable('TTRSS_HOST', Config::get(Config::SELF_URL_PATH));
+				$tpl->setVariable('TTRSS_HOST', Config::get_self_url());
 
 				$tpl->addBlock('message');
 
