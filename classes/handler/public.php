@@ -20,9 +20,9 @@ class Handler_Public extends Handler {
 		if (!$override_order) {
 			$override_order = "date_entered DESC, updated DESC";
 
-			if ($feed == -2 && !$is_cat) {
+			if ($feed == Feeds::FEED_PUBLISHED && !$is_cat) {
 				$override_order = "last_published DESC";
-			} else if ($feed == -1 && !$is_cat) {
+			} else if ($feed == Feeds::FEED_STARRED && !$is_cat) {
 				$override_order = "last_marked DESC";
 			}
 		}
@@ -269,7 +269,7 @@ class Handler_Public extends Handler {
 
 			if ($fresh) {
 				print ";";
-				print Feeds::_get_counters(-3, false, true, $uid);
+				print Feeds::_get_counters(Feeds::FEED_FRESH, false, true, $uid);
 			}
 		} else {
 			print "-1;User not found";
@@ -420,10 +420,10 @@ class Handler_Public extends Handler {
 				user_error("Failed login attempt for $login from {$_SERVER['REMOTE_ADDR']}", E_USER_WARNING);
 			}
 
-			$return = clean($_REQUEST['return']);
+			$return = clean($_REQUEST['return'] ?? '');
 
-			if ($_REQUEST['return'] && mb_strpos($return, Config::get_self_url()) === 0) {
-				header("Location: " . clean($_REQUEST['return']));
+			if ($return && mb_strpos($return, Config::get_self_url()) === 0) {
+				header("Location: $return");
 			} else {
 				header("Location: " . Config::get_self_url());
 			}
