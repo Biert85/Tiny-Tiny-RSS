@@ -759,7 +759,7 @@ const Headlines = {
 			console.log('received', headlines_count, 'headlines');
 
 			if (!append) {
-				Feeds.infscroll_disabled = parseInt(headlines_count) != 30;
+				Feeds.infscroll_disabled = parseInt(headlines_count) != 40;
 				console.log('infscroll_disabled=', Feeds.infscroll_disabled);
 
 				// also called in renderAgain() after view mode switch
