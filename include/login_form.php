@@ -128,7 +128,7 @@
 					   onchange="UtilityApp.fetchProfiles()"
 					   onfocus="UtilityApp.fetchProfiles()"
 					   onblur="UtilityApp.fetchProfiles()"
-					   required="1" value="<?php echo isset($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : $_SESSION["fake_login"] ?>" />
+					   required="1" value="<?php echo isset($_SESSION["failed_login"]) ? $_SESSION["failed_login"] : ($_SESSION["fake_login"] ?? "") ?>" />
 			</fieldset>
 
 			<fieldset>
