@@ -1,19 +1,22 @@
 #!/bin/sh
 
-PHP_VERSION="$1"
+export PHP_IMAGE=registry.fakecake.org/infra/php8.3-alpine:3.19
 
-[ -z "$PHP_VERSION" ] && PHP_VERSION=8.1
+docker run --rm -v $(pwd):/app -v /tmp/phpstan:/tmp/phpstan \
+	--workdir /app ${PHP_IMAGE} \
+	php83 -d memory_limit=-1 ./vendor/bin/phpstan --memory-limit=2G --error-format=raw analyze .
 
-echo PHP_VERSION: ${PHP_VERSION}
-echo PWD: $(pwd)
+echo All done, RC=$?.
 
 while true; do
 	inotifywait . -e close_write -r -t 300 | grep -q .php && \
 		(
 			MODIFIED=$(git ls-files -m | grep .php)
 
-			docker run --rm -v $(pwd):/app -v /tmp/phpstan-8.1:/tmp/phpstan \
-				--workdir /app registry.fakecake.org/cthulhoo/ci-alpine:3.16 php81 -d memory_limit=-1 ./vendor/bin/phpstan --memory-limit=2G --error-format=raw analyze ${MODIFIED}
+			docker run --rm -v $(pwd):/app -v /tmp/phpstan:/tmp/phpstan \
+				--workdir /app ${PHP_IMAGE} \
+				php83 -d memory_limit=-1 ./vendor/bin/phpstan --memory-limit=2G --error-format=raw analyze .
+
 			echo All done, RC=$?.
 		)
 	sleep 1

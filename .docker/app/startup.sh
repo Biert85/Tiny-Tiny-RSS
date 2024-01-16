@@ -24,31 +24,35 @@ export PGPASSWORD=$TTRSS_DB_PASS
 
 [ ! -e /var/www/html/index.php ] && cp ${SCRIPT_ROOT}/index.php /var/www/html
 
-if [ ! -d $DST_DIR ]; then
-	mkdir -p $DST_DIR
-	chown $OWNER_UID:$OWNER_GID $DST_DIR
+if [ -z $SKIP_RSYNC_ON_STARTUP ]; then
+	if [ ! -d $DST_DIR ]; then
+		mkdir -p $DST_DIR
+		chown $OWNER_UID:$OWNER_GID $DST_DIR
 
-	sudo -u app rsync -a \
-		$SRC_DIR/ $DST_DIR/
+		sudo -u app rsync -a \
+			$SRC_DIR/ $DST_DIR/
+	else
+		chown -R $OWNER_UID:$OWNER_GID $DST_DIR
+
+		sudo -u app rsync -a --delete \
+			--exclude /cache \
+			--exclude /lock \
+			--exclude /feed-icons \
+			--exclude /plugins/af_comics/filters.local \
+			--exclude /plugins.local \
+			--exclude /templates.local \
+			--exclude /themes.local \
+			$SRC_DIR/ $DST_DIR/
+
+		sudo -u app rsync -a --delete \
+			$SRC_DIR/plugins.local/nginx_xaccel \
+			$DST_DIR/plugins.local/nginx_xaccel
+	fi
 else
-	chown -R $OWNER_UID:$OWNER_GID $DST_DIR
-
-	sudo -u app rsync -a --delete \
-		--exclude /cache \
-		--exclude /lock \
-		--exclude /feed-icons \
-		--exclude /plugins/af_comics/filters.local \
-		--exclude /plugins.local \
-		--exclude /templates.local \
-		--exclude /themes.local \
-		$SRC_DIR/ $DST_DIR/
-
-	sudo -u app rsync -a --delete \
-		$SRC_DIR/plugins.local/nginx_xaccel \
-		$DST_DIR/plugins.local/nginx_xaccel
+	echo "warning: working copy in $DST_DIR won't be updated, make sure you know what you're doing."
 fi
 
-for d in cache lock feed-icons plugins.local themes.local; do
+for d in cache lock feed-icons plugins.local themes.local templates.local cache/export cache/feeds cache/images cache/upload; do
 	sudo -u app mkdir -p $DST_DIR/$d
 done
 
@@ -61,7 +65,7 @@ sudo -u app cp ${SCRIPT_ROOT}/config.docker.php $DST_DIR/config.php
 chmod 644 $DST_DIR/config.php
 
 chown -R $OWNER_UID:$OWNER_GID $DST_DIR \
-	/var/log/php82
+	/var/log/php83
 
 if [ -z "$TTRSS_NO_STARTUP_PLUGIN_UPDATES" ]; then
 	echo updating all local plugins...
@@ -100,9 +104,9 @@ if [ ! -z "${TTRSS_XDEBUG_ENABLED}" ]; then
 	fi
 	echo enabling xdebug with the following parameters:
 	env | grep TTRSS_XDEBUG
-	cat > /etc/php82/conf.d/50_xdebug.ini <<EOF
+	cat > /etc/php83/conf.d/50_xdebug.ini <<EOF
 zend_extension=xdebug.so
-xdebug.mode=develop,trace,debug
+xdebug.mode=debug
 xdebug.start_with_request = yes
 xdebug.client_port = ${TTRSS_XDEBUG_PORT}
 xdebug.client_host = ${TTRSS_XDEBUG_HOST}
@@ -110,17 +114,17 @@ EOF
 fi
 
 sed -i.bak "s/^\(memory_limit\) = \(.*\)/\1 = ${PHP_WORKER_MEMORY_LIMIT}/" \
-	/etc/php82/php.ini
+	/etc/php83/php.ini
 
 sed -i.bak "s/^\(pm.max_children\) = \(.*\)/\1 = ${PHP_WORKER_MAX_CHILDREN}/" \
-	/etc/php82/php-fpm.d/www.conf
+	/etc/php83/php-fpm.d/www.conf
 
-sudo -Eu app php82 $DST_DIR/update.php --update-schema=force-yes
+sudo -Eu app php83 $DST_DIR/update.php --update-schema=force-yes
 
 if [ ! -z "$ADMIN_USER_PASS" ]; then
-	sudo -Eu app php82 $DST_DIR/update.php --user-set-password "admin:$ADMIN_USER_PASS"
+	sudo -Eu app php83 $DST_DIR/update.php --user-set-password "admin:$ADMIN_USER_PASS"
 else
-	if sudo -Eu app php82 $DST_DIR/update.php --user-check-password "admin:password"; then
+	if sudo -Eu app php83 $DST_DIR/update.php --user-check-password "admin:password"; then
 		RANDOM_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16 ; echo '')
 
 		echo "*****************************************************************************"
@@ -128,17 +132,23 @@ else
 		echo "* If you want to set it manually, use ADMIN_USER_PASS environment variable. *"
 		echo "*****************************************************************************"
 
-		sudo -Eu app php82 $DST_DIR/update.php --user-set-password "admin:$RANDOM_PASS"
+		sudo -Eu app php83 $DST_DIR/update.php --user-set-password "admin:$RANDOM_PASS"
 	fi
 fi
 
 if [ ! -z "$ADMIN_USER_ACCESS_LEVEL" ]; then
-	sudo -Eu app php82 $DST_DIR/update.php --user-set-access-level "admin:$ADMIN_USER_ACCESS_LEVEL"
+	sudo -Eu app php83 $DST_DIR/update.php --user-set-access-level "admin:$ADMIN_USER_ACCESS_LEVEL"
 fi
 
 if [ ! -z "$AUTO_CREATE_USER" ]; then
-	sudo -Eu app /bin/sh -c "php82 $DST_DIR/update.php --user-exists $AUTO_CREATE_USER ||
-		php82 $DST_DIR/update.php --force-yes --user-add \"$AUTO_CREATE_USER:$AUTO_CREATE_USER_PASS:$AUTO_CREATE_USER_ACCESS_LEVEL\""
+	sudo -Eu app /bin/sh -c "php83 $DST_DIR/update.php --user-exists $AUTO_CREATE_USER ||
+		php83 $DST_DIR/update.php --force-yes --user-add \"$AUTO_CREATE_USER:$AUTO_CREATE_USER_PASS:$AUTO_CREATE_USER_ACCESS_LEVEL\""
+
+	if [ ! -z "$AUTO_CREATE_USER_ENABLE_API" ]; then
+		# TODO: remove || true later
+		sudo -Eu app /bin/sh -c "php83 $DST_DIR/update.php --user-enable-api \"$AUTO_CREATE_USER:$AUTO_CREATE_USER_ENABLE_API\"" || true
+	fi
+
 fi
 
 rm -f /tmp/error.log && mkfifo /tmp/error.log && chown app:app /tmp/error.log
@@ -150,4 +160,4 @@ unset AUTO_CREATE_USER_PASS
 
 touch $DST_DIR/.app_is_ready
 
-exec /usr/sbin/php-fpm82 --nodaemonize --force-stderr
+exec /usr/sbin/php-fpm83 --nodaemonize --force-stderr

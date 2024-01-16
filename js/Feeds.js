@@ -23,6 +23,7 @@ const	Feeds = {
 	infscroll_in_progress: 0,
 	infscroll_disabled: 0,
 	_infscroll_timeout: false,
+	_filter_query: false, // TODO: figure out the UI for this
 	_search_query: false,
 	last_search_query: [],
 	_viewfeed_wait_timeout: false,
@@ -154,13 +155,17 @@ const	Feeds = {
 	toggle: function() {
 		Element.toggle("feeds-holder");
 	},
+	cancelFilter: function() {
+		this._filter_query = "";
+		this.reload();
+	},
 	cancelSearch: function() {
 		this._search_query = "";
 		this.reloadCurrent();
 	},
 	// null = get all data, [] would give empty response for specific type
 	requestCounters: function(feed_ids = null, label_ids = null) {
-		xhr.json("backend.php", {op: "rpc",
+		xhr.json("backend.php", {op: "RPC",
 							method: "getAllCounters",
 							"feed_ids[]": feed_ids,
 							"feed_id_count": feed_ids ? feed_ids.length : -1,
@@ -178,8 +183,14 @@ const	Feeds = {
 				dijit.byId("feedTree").destroyRecursive();
 			}
 
+			let query = {op: 'Pref_Feeds', method: 'getfeedtree', mode: 2};
+
+			if (this._filter_query) {
+				query = Object.assign(query, this._filter_query);
+			}
+
 			const store = new dojo.data.ItemFileWriteStore({
-				url: "backend.php?op=pref_feeds&method=getfeedtree&mode=2"
+				url: "backend.php?" + dojo.objectToQuery(query)
 			});
 
 			// noinspection JSUnresolvedFunction
@@ -347,7 +358,7 @@ const	Feeds = {
 	toggleUnread: function() {
 		const hide = !App.getInitParam("hide_read_feeds");
 
-		xhr.post("backend.php", {op: "rpc", method: "setpref", key: "HIDE_READ_FEEDS", value: hide}, () => {
+		xhr.post("backend.php", {op: "RPC", method: "setpref", key: "HIDE_READ_FEEDS", value: hide}, () => {
 			this.hideOrShowFeeds(hide);
 			App.setInitParam("hide_read_feeds", hide);
 		});
@@ -386,7 +397,7 @@ const	Feeds = {
 			}, 10 * 1000);
 		}
 
-		let query = {...{op: "feeds", method: "view", feed: feed}, ...dojo.formToObject("toolbar-main")};
+		let query = {...{op: "Feeds", method: "view", feed: feed}, ...dojo.formToObject("toolbar-main")};
 
 		if (method) query.m = method;
 
@@ -435,7 +446,7 @@ const	Feeds = {
 
 			Notify.progress("Marking all feeds as read...");
 
-			xhr.json("backend.php", {op: "feeds", method: "catchupAll"}, () => {
+			xhr.json("backend.php", {op: "Feeds", method: "catchupAll"}, () => {
 				this.reloadCurrent();
 			});
 
@@ -473,7 +484,7 @@ const	Feeds = {
 		}
 
 		const catchup_query = {
-			op: 'rpc', method: 'catchupFeed', feed_id: feed,
+			op: 'RPC', method: 'catchupFeed', feed_id: feed,
 			is_cat: is_cat, mode: mode, search_query: this.last_search_query[0],
 			search_lang: this.last_search_query[1]
 		};
@@ -612,7 +623,7 @@ const	Feeds = {
 	},
 	search: function() {
 		xhr.json("backend.php",
-					{op: "feeds", method: "search"},
+					{op: "Feeds", method: "search"},
 					(reply) => {
 						try {
 							const dialog = new fox.SingleUseDialog({
@@ -683,10 +694,52 @@ const	Feeds = {
 					});
 
 	},
+	filter: function() {
+		const dialog = new fox.SingleUseDialog({
+			content: `
+				<form onsubmit='return false'>
+					<section>
+						<fieldset>
+							<input dojoType='dijit.form.ValidationTextBox' id='filter_query'
+								style='font-size : 16px; width : 540px;'
+								placeHolder="${__("Show feeds matching...")}"
+								name='search' type='search' value=''>
+						</fieldset>
+					</section>
+
+					<footer>
+						${App.FormFields.submit_tag(App.FormFields.icon("search") + " " + __('Search'), {onclick: "App.dialogOf(this).execute()"})}
+						${App.FormFields.cancel_dialog_tag(__('Cancel'))}
+					</footer>
+				</form>
+			`,
+			title: __("Search feeds"),
+			execute: function () {
+				if (this.validate()) {
+					Feeds._filter_query = this.attr('value');
+
+					this.hide();
+					Feeds.reload();
+				}
+			},
+		});
+
+		const tmph = dojo.connect(dialog, 'onShow', function () {
+			dojo.disconnect(tmph);
+
+			if (Feeds._filter_query && Feeds._filter_query.search) {
+				dijit.byId('filter_query')
+					.attr('value', Feeds._filter_query.search);
+			}
+		});
+
+		dialog.show();
+
+	},
 	updateRandom: function() {
 		console.log("in update_random_feed");
 
-		xhr.json("backend.php", {op: "rpc", method: "updaterandomfeed"}, () => {
+		xhr.json("backend.php", {op: "RPC", method: "updaterandomfeed"}, () => {
 			//
 		});
 	},

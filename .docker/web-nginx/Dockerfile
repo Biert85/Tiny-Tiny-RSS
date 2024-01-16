@@ -1,8 +1,9 @@
-FROM registry.fakecake.org/docker.io/nginx:alpine
+ARG PROXY_REGISTRY
+FROM ${PROXY_REGISTRY}nginx:alpine
 
 HEALTHCHECK CMD curl --fail http://localhost/tt-rss/index.php || exit 1
 
-COPY nginx.conf /etc/nginx/templates/nginx.conf.template
+COPY .docker/web-nginx/nginx.conf /etc/nginx/templates/nginx.conf.template
 
 # By default, nginx will send the php requests to "app" server, but this server
 # name can be overridden at runtime by passing an APP_UPSTREAM env var
@@ -13,6 +14,9 @@ ENV APP_WEB_ROOT=${APP_WEB_ROOT:-/var/www/html}
 
 # Base location for tt-rss (defaults to /tt-rss)
 ENV APP_BASE=${APP_BASE:-/tt-rss}
+
+# Resolver for nginx (kube-dns.kube-system.svc.cluster.local for k8s)
+ENV RESOLVER=${RESOLVER:-127.0.0.11}
 
 # In order to make tt-rss appear on website root without /tt-rss/ set above as follows in .env:
 # APP_WEB_ROOT=/var/www/html/tt-rss
