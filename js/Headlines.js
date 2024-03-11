@@ -468,8 +468,9 @@ const Headlines = {
 
 		if (headlines.vfeed_group_enabled && hl.feed_title && this.vgroup_last_feed != hl.feed_id) {
 			const vgrhdr = `<div data-feed-id='${hl.feed_id}' class='feed-title'>
-									<div class="pull-right">${Feeds.renderIcon(hl.feed_id, hl.has_icon)}</div>
-									<a class="title" href="#" onclick="Feeds.open({feed:${hl.feed_id}})">${hl.feed_title}</a>
+									<div class="pull-right icon-feed" title="${App.escapeHtml(hl.feed_title)}"
+										onclick="Feeds.open({feed:${hl.feed_id}})">${Feeds.renderIcon(hl.feed_id, hl.has_icon)}</div>
+									<a class="title" title="${__('Open site')}" target="_blank" rel="noopener noreferrer" href="${App.escapeHtml(hl.site_url)}">${hl.feed_title}</a>
 									<a class="catchup" title="${__('mark feed as read')}" onclick="Feeds.catchupFeedInGroup(${hl.feed_id})" href="#">
 										<i class="icon-done material-icons">done_all</i>
 									</a>
@@ -517,8 +518,8 @@ const Headlines = {
 								${hl.cdm_excerpt ? hl.cdm_excerpt : ""}
 							</span>
 
-							<a href="#" class="feed vfeedMenuAttach" style="background-color: ${hl.feed_bg_color}" data-feed-id="${hl.feed_id}"
-								onclick="Feeds.open({feed:${hl.feed_id}})">${hl.feed_title}</a>
+							<a class="feed vfeedMenuAttach" style="background-color: ${hl.feed_bg_color}" data-feed-id="${hl.feed_id}"
+								title="${__('Open site')}" target="_blank" rel="noopener noreferrer" href="${App.escapeHtml(hl.site_url)}">${hl.feed_title}</a>
 
 							<span class="updated" title="${hl.imported}">${hl.updated}</span>
 
@@ -587,7 +588,7 @@ const Headlines = {
 				</span>
 			</div>
 			<span class="feed vfeedMenuAttach" data-feed-id="${hl.feed_id}">
-				<a style="background : ${hl.feed_bg_color}" href="#" onclick="Feeds.open({feed:${hl.feed_id}})">${hl.feed_title}</a>
+				<a title="${__('Open site')}" style="background : ${hl.feed_bg_color}" target="_blank" rel="noopener noreferrer" href="${App.escapeHtml(hl.site_url)}">${hl.feed_title}</a>
 			</span>
 			<div title="${hl.imported}">
 				<span class="updated">${hl.updated}</span>

@@ -18,6 +18,9 @@ include:
   - project: 'ci/ci-templates'
     ref: master
     file: .ci-integration-test.yml
+  - project: 'ci/ci-templates'
+    ref: master
+    file: .ci-update-helm-imagetag.yml
 
 phpunit:
   extends: .phpunit
@@ -65,7 +68,7 @@ phpdoc:
 phpunit-integration:
   image: ${PHP_IMAGE}
   variables:
-    TEST_HELM_REPO: https://gitlab.tt-rss.org/tt-rss/helm-charts/tt-rss
+    TEST_HELM_REPO: oci://registry.fakecake.org/infra/helm-charts/tt-rss
   extends: .integration-test
   script:
     - export K8S_NAMESPACE=$(kubectl get pods -o=custom-columns=NS:.metadata.namespace | tail -1)
@@ -87,7 +90,7 @@ phpunit-integration:
 selenium:
   image: ${SELENIUM_IMAGE}
   variables:
-    TEST_HELM_REPO: https://gitlab.tt-rss.org/tt-rss/helm-charts/tt-rss
+    TEST_HELM_REPO: oci://registry.fakecake.org/infra/helm-charts/tt-rss
     SELENIUM_GRID_ENDPOINT: http://selenium-hub.selenium-grid.svc.cluster.local:4444/wd/hub
   extends: .integration-test
   script:
@@ -113,13 +116,21 @@ ttrss-fpm-pgsql-static:publish:
     DOCKERFILE: ${CI_PROJECT_DIR}/.docker/app/Dockerfile
 
 update-demo:
-  stage: publish
-  image: ${HELM_IMAGE}
+  extends: .update-helm-imagetag
   variables:
-    HELM_REPO: https://gitlab.tt-rss.org/tt-rss/helm-charts/tt-rss
-  script:
-    - git clone ${HELM_REPO} chart
-    - helm upgrade --atomic --install tt-rss-demo chart --values .helm/values-demo.yaml --set imageTag=${CI_COMMIT_SHORT_SHA}
+    CHART_REPO: gitlab.fakecake.org/git/helm-charts/tt-rss.git
+    CHART_VALUES: values-demo.yaml
+    ACCESS_TOKEN: ${DEMO_HELM_TOKEN}
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_REGISTRY_USER != null && $UPDATE_DEMO == "true"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $DEMO_HELM_TOKEN != null
+  stage: publish
 
+update-prod:
+  extends: .update-helm-imagetag
+  variables:
+    CHART_REPO: gitlab.fakecake.org/git/helm-charts/tt-rss-prod.git
+    CHART_VALUES: values-prod.yaml
+    ACCESS_TOKEN: ${PROD_HELM_TOKEN}
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $PROD_HELM_TOKEN != null
+  stage: publish
